@@ -1,0 +1,4 @@
+name = "MRIRecon"
+uuid = "8e7948fc-6959-4cf2-9d72-a4f58f174d24"
+authors = ["Felix Horger <felix.horger@kcl.ac.uk>"]
+version = "0.1.0"

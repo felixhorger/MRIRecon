@@ -21,11 +21,11 @@ module MRIRecon
 	end
 	# TODO: Smooth high res scan for computing coil profiles? There is a paper on this
 
-	@generated function half_fov_shift!(kspace::AbstractArray{<: Number, N}) where N
+	@generated function half_fov_shift!(kspace::AbstractArray{<: Number, N}, axes::Val{M}) where {N,M}
 		return quote
 			@inbounds @nloops $N k kspace begin
 				s = 0
-				@nexprs $N (d -> s += k_d)
+				@nexprs $M (d -> s += k_d)
 				if isodd(s)
 					(@nref $N kspace k) *= -1
 				end

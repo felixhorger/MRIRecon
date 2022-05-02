@@ -1,6 +1,9 @@
 
 module MRIRecon
 
+	#using FFTW
+	using Base.Cartesian
+
 	function root_sum_of_squares(signals::AbstractArray{<: Number}, dim::Val{N}=Val(1)) where N
 		result = dropdims(sum(abs2, signals; dims=N); dims=N)
 		@. result = sqrt(result)
@@ -16,6 +19,19 @@ module MRIRecon
 			dims=N
 		)
 	end
-	# TODO: Smooth high res scan for computing coil profiles?
+	# TODO: Smooth high res scan for computing coil profiles? There is a paper on this
+
+	@generated function half_fov_shift!(kspace::AbstractArray{<: Number, N}) where N
+		return quote
+			@inbounds @nloops $N k kspace begin
+				s = 0
+				@nexprs $N (d -> s += k_d)
+				if isodd(s)
+					(@nref $N kspace k) *= -1
+				end
+			end
+			return kspace
+		end
+	end
 end
 

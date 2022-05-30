@@ -2,3 +2,8 @@ name = "MRIRecon"
 uuid = "8e7948fc-6959-4cf2-9d72-a4f58f174d24"
 authors = ["Felix Horger <felix.horger@kcl.ac.uk>"]
 version = "0.1.0"
+
+[deps]
+FFTW = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
+FINUFFT = "d8beea63-0952-562e-9c6a-8e8ef7364055"
+LinearMaps = "7a12625a-238d-50fd-b39a-03d52299707e"

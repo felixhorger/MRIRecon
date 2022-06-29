@@ -24,11 +24,12 @@ end
 
 
 function plan_spatial_ft(
-	kx::AbstractArray{<: Number},
-	ky::AbstractArray{<: Number},
-	shape::NTuple{3, Integer}
-) where N
-	# Scaling?
+	kx::Vector{<: Number},
+	ky::Vector{<: Number},
+	shape::NTuple{3, Integer},
+	eps::Real,
+	dtype::Type
+)
 
 	# Get dims
 	num_frequencies = length(kx)
@@ -43,14 +44,16 @@ function plan_spatial_ft(
 		spatial_dims,
 		-1, # iflag
 		other_dims, # ntrans
-		1e-8 # eps
+		eps; # eps
+		dtype
 	)
 	backward_plan = finufft_makeplan(
 		1, # type
 		spatial_dims,
 		1, # iflag
 		other_dims, # ntrans
-		1e-8 # eps
+		eps; # eps
+		dtype
 	)
 	for plan in (forward_plan, backward_plan)
 		# This should go into the finufft package
@@ -80,5 +83,35 @@ function plan_spatial_ft(
 	)
 
 	return F
+end
+
+
+@generated function half_fov_shift!(kspace::AbstractArray{<: Number, N}, first_n_axes::Val{M}) where {N,M}
+	return quote
+		@inbounds @nloops $N k kspace begin # nloops gives k_1, k_2, ... k_N
+			s = 0
+			@nexprs $M (d -> s += k_d) # This only considers k_1, k_2, ... k_M
+			if isodd(s)
+				(@nref $N kspace k) *= -1
+			end
+		end
+		return kspace
+	end
+end
+
+
+function shift_fov!(
+	kspace::AbstractMatrix{<: Number},
+	k::AbstractMatrix{<: Real}, # First axis x,y,... second axis samples
+	shift::AbstractVector{<: Real}
+)
+	@assert size(k, 1) == length(shift) # Spatial dimension
+	@assert size(kspace, 1) == size(k, 2) # Number of samples
+	# Precompute phase modulation
+	phase_modulation = exp.(-im .* (k' * shift))
+	# Iterate
+	@inbounds for i in axes(kspace, 2)
+		kspace[:, i] .*= phase_modulation
+	end
 end
 

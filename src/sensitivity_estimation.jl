@@ -110,10 +110,14 @@ function espirit_mask_eigenvecs(
 	eigenvals::AbstractArray{<: Real, 2},
 	λ_cut::Real
 )
-	# Compute sensitivities by masking with the eigenvalues
 	@views begin
-		mask = @. (eigenvals[1:1, :])^2 > λ_cut
-		sensitivities = @. mask * eigenvecs[:, 1, :] * exp(-im * angle(eigenvecs[1:1, 1, :]))
+		# Synchronise relative phase via the first channel
+		sensitivities = @. eigenvecs[:, 1, :] * exp(-im * angle(eigenvecs[1:1, 1, :]))
+		# Mask where λ ≠ 1
+		mask = @. (eigenvals[1, :])^2 > λ_cut
+		@inbounds for i in eachindex(mask)
+			mask[i] || (sensitivities[:, i] .= 0)
+		end
 	end
 	return sensitivities
 end
@@ -148,8 +152,8 @@ end
 """
 	First axis of must be channels
 """
-@inline function project(data::AbstractArray{<: Number, N}, sensitivities::AbstractArray{<: Number, N})
-	conj.(sensitivites) .* sum(data .* sensitivites; dims=1)
+@inline function espirit_project(data::AbstractArray{<: Number, N}, sensitivities::AbstractArray{<: Number, N}) where N
+	conj.(sensitivities) .* sum(data .* sensitivities; dims=1)
 end
 
 #plt.figure()

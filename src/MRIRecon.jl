@@ -6,6 +6,7 @@ module MRIRecon
 	using LinearAlgebra
 	using LinearMaps
 	using Base.Cartesian
+	using MRIHankel
 
 	include("fourier.jl")
 	include("masking.jl")

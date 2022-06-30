@@ -69,9 +69,15 @@ end
 		neighbours = kernelsize^$N
 		kernels = size(V_parallel, 2)
 		channels_and_kernels = channels * kernels
-		VT_parallel = begin
-			tmp = reshape(V_parallel, neighbours, channels_and_kernels)
-			tmp = (collect ∘ transpose)(tmp)
+		VH_parallel = begin
+			# Restore kspace shape
+			tmp = reshape(V_parallel, (@ntuple $N d -> kernelsize)..., channels_and_kernels)
+			# Flip back
+			# because the found weights are the kernel but flipped (convolution!)
+			reverse!(tmp; dims=(@ntuple $N d -> d))
+			# Flatten kspace shape and get transpose (better for matrix multiplication below)
+			tmp = reshape(tmp, neighbours, channels_and_kernels)
+			VH_parallel = (collect ∘ adjoint)(tmp)
 		end
 
 		F = fourier_matrix((@ntuple $N d -> kernelsize), outshape)
@@ -79,7 +85,8 @@ end
 		# Fourier transform filters
 		length_out = prod(outshape)
 		transformed_kernels = Matrix{ComplexF64}(undef, channels_and_kernels, length_out)
-		mul!(transformed_kernels, VT_parallel, F) # = F^H * conj.(kernels)
+		mul!(transformed_kernels, VH_parallel, F)
+		# V_∥^H * F = (F^H * V_∥)^H
 
 		# Separate channels and kernels
 		return reshape(transformed_kernels, channels, kernels, length_out) 
@@ -153,7 +160,7 @@ end
 	First axis of must be channels
 """
 @inline function espirit_project(data::AbstractArray{<: Number, N}, sensitivities::AbstractArray{<: Number, N}) where N
-	conj.(sensitivities) .* sum(data .* sensitivities; dims=1)
+	sensitivities .* sum(data .* conj.(sensitivities); dims=1)
 end
 
 #plt.figure()

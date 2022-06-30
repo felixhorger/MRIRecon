@@ -86,6 +86,27 @@ function plan_spatial_ft(
 end
 
 
+@generated function fourier_matrix(inshape::NTuple{N, Integer}, outshape::NTuple{N, Integer}) where N
+	@assert N > 0
+	return quote
+		shift = inshape .÷ 2
+		# Precompute exponentials
+		@nexprs $N d -> max_power_d = (outshape[d] .- 1) .* shift[d]
+		@nexprs $N d -> ξ_d = @. exp(-im * 2π / outshape[d])^(-max_power_d:max_power_d)
+		fourier_matrix = Array{ComplexF64, $(2N)}(undef, inshape..., outshape...)
+		# Fill matrix
+		@inbounds @nloops $N x (d -> 0:outshape[d]-1) begin # Spatial positions
+			x = (@ntuple $N d -> x_d)
+			@nloops $N k (d -> -shift[d]:shift[d]-1) begin # Iterate over neighbours
+				k = (@ntuple $N d -> k_d)
+				fourier_matrix[(k .+ shift .+ 1)..., (x .+ 1)...] = prod(@ntuple $N d -> ξ_d[x_d * k_d + max_power_d + 1])
+			end
+		end
+		return reshape(fourier_matrix, prod(inshape), prod(outshape))
+	end
+end
+
+
 @generated function half_fov_shift!(kspace::AbstractArray{<: Number, N}, first_n_axes::Val{M}) where {N,M}
 	return quote
 		@inbounds @nloops $N k kspace begin # nloops gives k_1, k_2, ... k_N

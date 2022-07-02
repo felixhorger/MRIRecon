@@ -26,17 +26,18 @@ shape = (spatial dimensions, other dimension)
 """
 function plan_sensitivities(
 	sensitivities::AbstractArray{<: Number, N},
-	shape::NTuple{N, <: Integer}
-) where N
+	shape::NTuple{M, Integer}
+) where {N,M}
+	@assert M == N + 1
 
 	# Get dimensions
 	# TODO: check spatial dims
-	other_dims = shape[N]
-	shape = shape[1:N-1]
+	other_dims = shape[M]
+	shape = shape[1:N]
 	shape_s = size(sensitivities)
-	@assert shape == shape_s[1:N-1]
+	@assert shape == shape_s
 	channels = shape_s[N]
-	spatial_dimensions = prod(shape)
+	spatial_dimensions = prod(shape[1:N-1])
 	input_dimension = spatial_dimensions * other_dims
 	output_dimension = input_dimension * channels
 

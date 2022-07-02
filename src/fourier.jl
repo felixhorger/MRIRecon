@@ -1,8 +1,12 @@
 
-function plan_spatial_ft(x::AbstractArray{<: Number, N}, dims::Integer) where N
-	# x[spatial dimensions..., other dimensions...]
+function plan_spatial_ft(
+	x::AbstractArray{<: Number, N} where N,
+	dims::Union{Integer, NTuple{M, <: Integer} where M, AbstractVector}
+)
+	# Best practice: x[spatial dimensions..., other dimensions...]
+	# If the user decides to mix spatial and other dimensions, good luck!
 	# Pay attention that they have to be applied in pairs! Otherwise scaling
-	FFT = plan_fft(x, 1:dims)
+	FFT = plan_fft(x, dims)
 	FFTH = inv(FFT)
 	shape = size(x)
 	restore_shape(x) = reshape(x, shape) # Note that x is Vector
@@ -107,6 +111,9 @@ end
 end
 
 
+"""
+	Mathematically equivalent to fftshift, but in kspace
+"""
 @generated function half_fov_shift!(kspace::AbstractArray{<: Number, N}, first_n_axes::Val{M}) where {N,M}
 	return quote
 		@inbounds @nloops $N k kspace begin # nloops gives k_1, k_2, ... k_N

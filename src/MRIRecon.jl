@@ -11,6 +11,7 @@ module MRIRecon
 	include("fourier.jl")
 	include("masking.jl")
 	include("coil_combination.jl")
+	include("sense.jl")
 	include("sensitivity_estimation.jl")
 
 end

@@ -27,22 +27,24 @@ end
 ) where N
 	return quote
 		@assert length(indices) != 0
-		indices_to_mask = Vector{NTuple{$N, Int}}(undef, prod(shape[1:$N]) - length(indices))
+		indices_to_mask = Vector{NTuple{$N, Int}}(undef, prod(shape[1:$N]) - length(indices)÷shape[$N] - 1)
 		i = 1 # Counter for indices
-		j = 1 # Counter for indices_to_mask
+		j = 0 # Counter for indices_to_mask
 		@nextract $N y (d -> indices[1][d]) # Get initial spatial index that is sampled
 		@nloops $N x (d -> 1:shape[d]) begin
-			if @nall $N (d -> x_d == y_d)
-				# Get next spatial index which is sampled
-				@nextract $N y (d -> indices[i][d])
-				i += 1
-			else
+			if @nany $N (d -> x_d != y_d)
 				# Index isn't sampled, store it
-				indices_to_mask[j] = @ntuple $N (d -> x_d)
 				j += 1
+				indices_to_mask[j] = @ntuple $N (d -> x_d)
+				continue
+			end
+			while (@nall $N (d -> x_d == y_d)) && i < length(indices) # Correct because i is incremented before access
+				# Get next spatial index which is sampled
+				i += 1
+				@nextract $N y (d -> indices[i][d])
 			end
 		end
-		return indices_to_mask
+		return indices_to_mask[1:j]
 	end
 end
 
@@ -53,8 +55,8 @@ end
 function apply_sparse_mask!(a::Array{<: Number, N}, indices_to_mask::Vector{Vector{NTuple{D, Int64}}}) where {N, D}
 	@assert N == D + 2
 	for j = 1:size(a, N)
-		for i in indices_to_mask[j]
-			a[i..., :, j] *= 0
+		@views @inbounds for i in indices_to_mask[j]
+			a[i..., :, j] .*= 0
 		end
 	end
 	return a
@@ -80,7 +82,7 @@ function plan_masking(
 
 	# Split into frames
 	split_indices = [
-		Vector{NTuple{D, Int64}}(undef, (length(indices) ÷ num_dynamic) + 1)
+		Vector{NTuple{D, Int64}}(undef, length(indices) ÷ num_dynamic + 1)
 		for _ in 1:num_dynamic
 	]
 	readouts_per_dynamic = zeros(Int64, num_dynamic)
@@ -91,7 +93,6 @@ function plan_masking(
 	end
 
 	# Sort within each dynamic frame and find unsampled indices
-	num_unsampled_indices = prod(shape[1:D]) - length(indices)
 	indices_to_mask = Vector{Vector{NTuple{D, Int64}}}(undef, num_dynamic)
 	let by = (t::NTuple{D, Integer} -> linear_indices[t...])
 		@views for j = 1:num_dynamic

@@ -143,3 +143,30 @@ function shift_fov!(
 	end
 end
 
+
+import FFTW: fftshift, ifftshift
+function fftshift(
+	shape::NTuple{N, Integer},
+	indices::AbstractVector{<: NTuple{N, Integer}}
+) where N
+	indices = copy(indices)
+	shift = shape .÷ 2
+	@show shape, shift
+	for i in eachindex(indices)
+		indices[i] = mod1.(indices[i] .+ shift, shape)
+	end
+	return indices
+end
+function ifftshift(
+	shape::NTuple{N, Integer},
+	indices::AbstractVector{<: NTuple{N, Integer}}
+) where N
+	indices = copy(indices)
+	shift = shape .÷ 2
+	@show shape, shift
+	for i in eachindex(indices)
+		indices[i] = mod1.(indices[i] .- shift, shape)
+	end
+	return indices
+end
+

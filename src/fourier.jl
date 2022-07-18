@@ -91,6 +91,7 @@ end
 
 
 @generated function fourier_matrix(inshape::NTuple{N, Integer}, outshape::NTuple{N, Integer}) where N
+	# TODO: Version where only the powers are stored and matrix is subtype of AbstractMatrix, getindex computes element on the fly
 	@assert N > 0
 	return quote
 		shift = inshape .÷ 2
@@ -99,11 +100,11 @@ end
 		@nexprs $N d -> ξ_d = @. exp(-im * 2π / outshape[d])^(-max_power_d:max_power_d)
 		fourier_matrix = Array{ComplexF64, $(2N)}(undef, inshape..., outshape...)
 		# Fill matrix
-		@inbounds @nloops $N x (d -> 0:outshape[d]-1) begin # Spatial positions
-			x = (@ntuple $N d -> x_d)
-			@nloops $N k (d -> -shift[d]:shift[d]-1) begin # Iterate over neighbours
-				k = (@ntuple $N d -> k_d)
-				fourier_matrix[(k .+ shift .+ 1)..., (x .+ 1)...] = prod(@ntuple $N d -> ξ_d[x_d * k_d + max_power_d + 1])
+		for X in CartesianIndices(outshape) # Spatial positions
+			x = Tuple(X) .- 1
+			for K in CartesianIndices(inshape) # Iterate over neighbours
+				k = Tuple(K) .- shift .- 1
+				fourier_matrix[K, X] = prod(@ntuple $N d -> ξ_d[x[d] * k[d] + max_power_d + 1])
 			end
 		end
 		return reshape(fourier_matrix, prod(inshape), prod(outshape))
@@ -111,14 +112,45 @@ end
 end
 
 
+
+"""
+	Evaluate a single Fourier coefficient
+	Not as accurate as the fft since the Fourier sum is explicitly computed
+
+	cexp = exp(im * 2π / size(f, 1))^x
+
+"""
+# TODO: Inbounds
+@generated function mini_dft!(
+	cexp::Complex,
+	f::AbstractArray{<: Number, N},
+	F::AbstractArray{<: Complex, M}
+) where {N,M}
+	@assert N == M + 1
+	return quote
+		@views for x in CartesianIndices(size(f)[2:$N])
+			F[x] = evalpoly(cexp, f[:, x])
+		end
+		return F
+	end
+end
+mini_dft(cexp::Complex, f::AbstractVector{<: Number}) = evalpoly(cexp, f)
+
+
 """
 	Mathematically equivalent to fftshift, but in kspace
 """
-@generated function half_fov_shift!(kspace::AbstractArray{<: Number, N}, first_n_axes::Val{M}) where {N,M}
+@generated function shift_half_fov!(kspace::AbstractArray{<: Number, N}, dims::NTuple{M, Integer}) where {N,M}
+	@assert N >= M
 	return quote
-		@inbounds @nloops $N k kspace begin # nloops gives k_1, k_2, ... k_N
+		dims = Set(dims)
+		@assert all(d -> d <= $N, dims)
+		for K in CartesianIndices(kspace)
 			s = 0
-			@nexprs $M (d -> s += k_d) # This only considers k_1, k_2, ... k_M
+			k = Tuple(K)
+			for d = 1:$M
+				s += k[dims[d]]
+			end
 			if isodd(s)
 				(@nref $N kspace k) *= -1
 			end
@@ -146,8 +178,8 @@ end
 
 import FFTW: fftshift, ifftshift
 function fftshift(
-	shape::NTuple{N, Integer},
-	indices::AbstractVector{<: NTuple{N, Integer}}
+	indices::AbstractVector{<: NTuple{N, Integer}},
+	shape::NTuple{N, Integer}
 ) where N
 	indices = copy(indices)
 	shift = shape .÷ 2
@@ -158,8 +190,8 @@ function fftshift(
 	return indices
 end
 function ifftshift(
-	shape::NTuple{N, Integer},
-	indices::AbstractVector{<: NTuple{N, Integer}}
+	indices::AbstractVector{<: NTuple{N, Integer}},
+	shape::NTuple{N, Integer}
 ) where N
 	indices = copy(indices)
 	shift = shape .÷ 2
@@ -168,5 +200,16 @@ function ifftshift(
 		indices[i] = mod1.(indices[i] .- shift, shape)
 	end
 	return indices
+end
+
+"""
+	Circular convolution
+	This should be available in DSP.jl
+"""
+function circular_conv(u, v)
+	# TODO: Pad to same size
+	F = plan_fft(u)
+	FH = inv(F)
+	FH * ((F * u) .* (F * v))
 end
 

@@ -140,23 +140,22 @@ mini_dft(cexp::Complex, f::AbstractVector{<: Number}) = evalpoly(cexp, f)
 """
 	Mathematically equivalent to fftshift, but in kspace
 """
-@generated function shift_half_fov!(kspace::AbstractArray{<: Number, N}, dims::NTuple{M, Integer}) where {N,M}
-	@assert N >= M
-	return quote
-		dims = Set(dims)
-		@assert all(d -> d <= $N, dims)
-		for K in CartesianIndices(kspace)
-			s = 0
-			k = Tuple(K)
-			for d = 1:$M
-				s += k[dims[d]]
-			end
-			if isodd(s)
-				(@nref $N kspace k) *= -1
-			end
+function shift_half_fov!(kspace::AbstractArray{<: Number}, dims)
+	dims = Set(dims)
+	return shift_half_fov!(kspace, dims)
+end
+function shift_half_fov!(kspace::AbstractArray{<: Number, N}, dims::Set{<: Integer}) where N
+	@assert all(d -> d <= N, dims)
+	for K in CartesianIndices(kspace)
+		s = 0
+		for d in dims
+			s += K[d]
 		end
-		return kspace
+		if isodd(s)
+			kspace[K] *= -1
+		end
 	end
+	return kspace
 end
 
 
@@ -177,30 +176,22 @@ end
 
 
 import FFTW: fftshift, ifftshift
-function fftshift(
-	indices::AbstractVector{<: NTuple{N, Integer}},
-	shape::NTuple{N, Integer}
-) where N
-	indices = copy(indices)
-	shift = shape .÷ 2
-	@show shape, shift
-	for i in eachindex(indices)
-		indices[i] = mod1.(indices[i] .+ shift, shape)
+for (func, op) in ( (:fftshift, :(.+)), (:ifftshift, :(.-)) )
+	@eval begin
+		function $func(
+			indices::AbstractVector{<: NTuple{N, Integer}},
+			shape::NTuple{N, Integer}
+		) where N
+			indices = copy(indices)
+			shift = shape .÷ 2
+			for i in eachindex(indices)
+				indices[i] = mod1.($(Expr(:call, op, :(indices[i]), :shift)), shape)
+			end
+			return indices
+		end
 	end
-	return indices
 end
-function ifftshift(
-	indices::AbstractVector{<: NTuple{N, Integer}},
-	shape::NTuple{N, Integer}
-) where N
-	indices = copy(indices)
-	shift = shape .÷ 2
-	@show shape, shift
-	for i in eachindex(indices)
-		indices[i] = mod1.(indices[i] .- shift, shape)
-	end
-	return indices
-end
+
 
 """
 	Circular convolution

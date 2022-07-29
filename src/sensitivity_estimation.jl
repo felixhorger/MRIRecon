@@ -49,7 +49,7 @@ function espirit_select_kernels(
 
 	threshold = σ_cut^2 * σ_squared[end] # the latter is the maximum singular value
 	local i
-	for outer i = length(σ_squared):-1:1
+	@inbounds for outer i = length(σ_squared):-1:1
 		abs(σ_squared[i]) < threshold && break
 	end
 	V_parallel = V[:, i:end]
@@ -116,8 +116,8 @@ function espirit_eigen(transformed_kernels::AbstractArray{<: Number, N}, num_v::
 		g = transformed_kernels[:, :, X]
 		G[Threads.threadid()] .= g * g'
 		factorisation = eigen(Hermitian(G[Threads.threadid()]), channels-num_v+1:channels)
-		# HERE make arg how many, but put eigenvector axis last, so that they can easily be split
-		v[:, X, :] = factorisation.vectors
+		w = factorisation.vectors
+		v[:, X, :] = @. w * exp(-im * angle(w[1:1, :])) # Normalise phase to first channel
 		λ[X, :] = factorisation.values
 	end
 	return v, λ
@@ -202,7 +202,7 @@ function espirit_transform_and_eigen(
 			λ[x] = factorisation.values[1] # HERE use channels if all eigenvalues. Old comment: Largest λ at the end
 			@views begin
 				w = factorisation.vectors[:, 1] # HERE use channels if all eigenvalues are computed
-				@. v[:, x] = w .* exp(-im * angle(w[1])) # Normalise phase to first channel
+				v[:, x] = w .* exp(-im * angle(w[1])) # Normalise phase to first channel
 			end
 			# TODO: there is a paper on how to choose the phase so that the image is real (assuming the actual signal distribution is)
 		end
@@ -250,9 +250,11 @@ function estimate_sensitivities(
 	V_parallel = espirit_select_kernels(V, σ_squared, kernelsize, σ_cut)
 	transformed_kernels = espirit_transform_kernels(V_parallel, channels, outshape, kernelsize)
 	v, λ = espirit_eigen(transformed_kernels, 1)
+	v = dropdims(v; dims=N+1) # TODO: Check other λ, return multiple sensitivities if required
+	λ = dropdims(λ; dims=N)
 	sensitivities = espirit_mask_eigen(v, λ, λ_cut)
-	sensitivities = reshape(sensitivities, channels, outshape...)
-	return sensitivities
+	sensitivities = permutedims(sensitivities, ((2:N)..., 1))
+	return sensitivities 
 end
 
 

@@ -5,8 +5,8 @@ module MRIRecon
 	using FINUFFT
 	using LinearAlgebra
 	using LinearMaps
-	using Base.Cartesian
 	using MRIHankel
+	using Base.Cartesian
 
 	include("fourier.jl")
 	include("masking.jl")

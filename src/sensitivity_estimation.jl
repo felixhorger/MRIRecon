@@ -199,9 +199,9 @@ function espirit_transform_and_eigen(
 		let
 			mul!(G, transformed_kernels, transformed_kernels')
 			factorisation = eigen(Hermitian(G), channels:channels) # Power iterations are faster here
-			λ[x] = factorisation.values[1] # HERE use channels if all eigenvalues. Old comment: Largest λ at the end
+			λ[x] = factorisation.values[1]
 			@views begin
-				w = factorisation.vectors[:, 1] # HERE use channels if all eigenvalues are computed
+				w = factorisation.vectors[:, 1]
 				v[:, x] = w .* exp(-im * angle(w[1])) # Normalise phase to first channel
 			end
 			# TODO: there is a paper on how to choose the phase so that the image is real (assuming the actual signal distribution is)
@@ -210,20 +210,32 @@ function espirit_transform_and_eigen(
 	return v, λ
 end
 
+function smooth_step(x::Real)
+	x ≤ 0 && return 0.0
+	x ≥ 1 && return 1.0
+	return x^2 * (3 - 2x)
+end
+
+"""
+	λ_cut should be in (0, 1)
+"""
 function espirit_mask_eigen(
 	v::AbstractArray{<: Number, N},
 	λ::AbstractArray{<: Real, M},
-	λ_cut::Real
+	λ_cut::Real,
+
 ) where {N,M}
 	@assert N == M + 1
 	sensitivities = similar(v)
-	# Mask where λ ≠ 1
 	@views for x in CartesianIndices(λ)
-		if λ[x] >= λ_cut
-			sensitivities[:, x] = v[:, x]
-		else
-			sensitivities[:, x] .= 0
-		end
+		# Smooth cut-off (sigmoid), see Uecker2013a
+		sensitivities[:, x] = @. v[:, x] * smooth_step(λ[x] / λ_cut)
+		# Hard cut-off
+		#if λ[x] >= λ_cut
+		#	sensitivities[:, x] = v[:, x]
+		#else
+		#	sensitivities[:, x] .= 0
+		#end
 	end
 	return sensitivities
 end
@@ -253,15 +265,7 @@ function estimate_sensitivities(
 	v = dropdims(v; dims=N+1) # TODO: Check other λ, return multiple sensitivities if required
 	λ = dropdims(λ; dims=N)
 	sensitivities = espirit_mask_eigen(v, λ, λ_cut)
-	sensitivities = permutedims(sensitivities, ((2:N)..., 1))
+	sensitivities = permutedims(sensitivities, ((2:N)..., 1)) # Put channels last
 	return sensitivities 
-end
-
-
-"""
-	First axis of must be channels
-"""
-@inline function espirit_project(data::AbstractArray{<: Number, N}, sensitivities::AbstractArray{<: Number, N}) where N
-	sensitivities .* sum(data .* conj.(sensitivities); dims=1)
 end
 

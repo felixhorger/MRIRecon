@@ -1,0 +1,8 @@
+[deps]
+FFTW = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
+HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
+IterativeSolvers = "42fd0dbc-a981-5370-80f2-aaf504508153"
+MRIPhantoms = "64f9907d-2668-4e34-9cb6-f5030d0f4254"
+MRIRecon = "8e7948fc-6959-4cf2-9d72-a4f58f174d24"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"

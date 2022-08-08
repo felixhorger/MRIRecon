@@ -1,24 +1,20 @@
 
 """
-	plan_sensitivities(sensitivities::Union{AbstractMatrix{<: Number}, AbstractArray{<: Number, 3}}) = S
-
 	sensitivities[spatial dimensions..., channels]
-	num_x = all spatial dimensions
 """
 function plan_sensitivities(
 	sensitivities::AbstractArray{<: Number, N},
-	num_x::Integer,
 	num_dynamic::Integer
 ) where N
 	# Get dimensions
 	shape = size(sensitivities)
 	num_channels = shape[N]
+	num_x = prod(shape[1:N-1])
 	input_dimension = num_x * num_dynamic
 	output_dimension = input_dimension * num_channels
 
 	# Reshape
 	sensitivities = reshape(sensitivities, num_x, num_channels, 1)
-	conj_sensitivities = conj.(sensitivities)
 
 	S = LinearMap{ComplexF64}(
 		x::AbstractVector{<: Complex} -> begin
@@ -27,7 +23,7 @@ function plan_sensitivities(
 		end,
 		y::AbstractVector{<: Complex} -> begin
 			y = reshape(y, num_x, num_channels, num_dynamic)
-			SHy = sum(conj_sensitivities .* y; dims=2)
+			SHy = sum(@. conj(sensitivities) * y; dims=2)
 			vec(SHy)
 		end,
 		output_dimension, input_dimension

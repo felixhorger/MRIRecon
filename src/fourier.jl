@@ -90,6 +90,7 @@ function plan_spatial_ft(
 end
 
 
+
 @generated function fourier_matrix(inshape::NTuple{N, Integer}, outshape::NTuple{N, Integer}) where N
 	# TODO: Version where only the powers are stored and matrix is subtype of AbstractMatrix, getindex computes element on the fly
 	@assert N > 0
@@ -179,13 +180,18 @@ import FFTW: fftshift, ifftshift
 for (func, op) in ( (:fftshift, :(.+)), (:ifftshift, :(.-)) )
 	@eval begin
 		function $func(
-			indices::AbstractVector{<: NTuple{N, Integer}},
+			indices::AbstractVector{<: CartesianIndex{N}},
 			shape::NTuple{N, Integer}
 		) where N
 			indices = copy(indices)
 			shift = shape .÷ 2
 			for i in eachindex(indices)
-				indices[i] = mod1.($(Expr(:call, op, :(indices[i]), :shift)), shape)
+				indices[i] = CartesianIndex(
+					(mod1(
+						$(Expr(:call, op, :(indices[i][j]), :(shift[j]))), # index ± shift
+						shape[j]
+					) for j = 1:N)...
+				)
 			end
 			return indices
 		end
@@ -197,7 +203,7 @@ end
 	Circular convolution
 	This should be available in DSP.jl
 """
-function circular_conv(u, v)
+function circular_conv(u::AbstractArray{<: Number}, v::AbstractArray{<: Number})
 	# TODO: Pad to same size
 	F = plan_fft(u)
 	FH = inv(F)

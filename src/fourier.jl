@@ -1,14 +1,14 @@
 
-function plan_spatial_ft(
-	x::AbstractArray{<: Number, N} where N,
-	dims::Union{Integer, NTuple{M, <: Integer} where M, AbstractVector}
-)
+function plan_fourier_transform(
+	shape::NTuple{N, Integer},
+	dims::Union{Integer, NTuple{M, Integer} where M, AbstractVector},
+	type::Type=ComplexF64
+) where N
 	# Best practice: x[spatial dimensions..., other dimensions...]
 	# If the user decides to mix spatial and other dimensions, good luck!
 	# Pay attention that they have to be applied in pairs! Otherwise scaling
-	FFT = plan_fft(x, dims)
+	FFT = plan_fft(FFTW.FakeArray{ComplexF64, N}(shape, cumprod((1, shape[1:N-1]...))), dims)
 	FFTH = inv(FFT)
-	shape = size(x)
 	restore_shape(x) = reshape(x, shape) # Note that x is Vector
 	F = LinearMap{ComplexF64}(
 		x -> begin
@@ -27,7 +27,7 @@ function plan_spatial_ft(
 end
 
 
-function plan_spatial_ft(
+function plan_fourier_transform(
 	kx::Vector{<: Number},
 	ky::Vector{<: Number},
 	shape::NTuple{3, Integer},

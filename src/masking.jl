@@ -7,7 +7,7 @@ function sampling_mask(
 	shape::NTuple{N, Integer},
 	num_dynamic::Integer
 ) where N
-	b = zeros(Float64, 1, shape..., num_dynamic) # The one is for the readout axis
+	b = zeros(Bool, 1, shape..., num_dynamic) # The one is for the readout axis
 	for (i, j) in enumerate(indices)
 		b[1, j, mod1(i, num_dynamic)] = 1
 	end
@@ -73,6 +73,14 @@ function split_sampling(
 		split_indices[j][split_i[j]] = indices[i]
 	end
 	return split_indices
+end
+
+function is_unique_sampling(indices::AbstractVector{<: CartesianIndex{N}}, num_dynamic::Integer) where N
+	split_indices = split_sampling(indices, num_dynamic)
+	for i = 1:num_dynamic
+		length(Set(split_indices[i])) != length(split_indices[i]) && return false
+	end
+	return true
 end
 
 
@@ -146,22 +154,10 @@ end
 	For kspace data
 	readout direction and channels must be first axes of a
 	dynamic dimension is the last, assumed mod1(readout index, shape[N])
-	returns kspace[readout, channels, spatial dims, dynamics]
+	returns kspace[readout, spatial dims..., channels, dynamics]
 
 	if num_dynamic not given than that dim is dropped
-	This is not fully useful yet because it can't be used with the operators defined in this module.
 """
-function sparse2dense(
-	a::AbstractArray{<: Number, 3},
-	indices::AbstractVector{<: CartesianIndex{N}},
-	shape::NTuple{N, Integer}
-) where N
-	# Not optimal performance, but better than copying code
-	# and also this shouldn't be a performance critical function
-	b = sparse2dense(a, indices, shape, 1)
-	b = dropdims(b; dims=N+3) # N does not include readout direction, channels and dynamic
-	return b
-end
 function sparse2dense(
 	a::AbstractArray{<: Number, 3},
 	indices::AbstractVector{<: CartesianIndex{N}},
@@ -176,7 +172,26 @@ function sparse2dense(
 	return b
 end
 
+function sparse2dense_trunc(
+	a::AbstractArray{<: Number, 3},
+	indices::AbstractVector{<: CartesianIndex{N}},
+	shape::NTuple{N, Integer},
+	roi::NTuple{N, UnitRange{<: Integer}},
+	roi_shape::NTuple{N, Integer},
+	num_dynamic::Integer
+) where N
+	@assert size(a, 3) == length(indices)
+	b = zeros(eltype(a), size(a, 1), size(a, 2), roi_shape..., num_dynamic)
+	offset = CartesianIndex(ntuple(d -> roi[d][1] - 1, N))
+	for (i, j) in enumerate(indices)
+		any(ntuple(d -> j[d] ∉ roi[d], N)) && continue
+		b[:, :, j - offset, mod1(i, num_dynamic)] = a[:, :, i]
+	end
+	return b
+end
 
+
+# TODO: Maybe rewrite this to use CartesianIndices
 function centre_indices(shape::Integer, centre_size::Integer)
 	centre = shape ÷ 2
 	half = centre_size ÷ 2

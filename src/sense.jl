@@ -16,14 +16,19 @@ function plan_sensitivities(
 	# Reshape
 	sensitivities = reshape(sensitivities, num_x, num_channels, 1)
 
-	S = LinearMap{ComplexF64}(
-		x::AbstractVector{<: Complex} -> begin
+	S = LinearMap{ComplexF64}( # Note: This is not really julian! Type is checked in LinearMap :(
+		x::AbstractVector{ComplexF64} -> begin
 			Sx = sensitivities .* reshape(x, num_x, 1, num_dynamic)
 			vec(Sx)
 		end,
-		y::AbstractVector{<: Complex} -> begin
+		y::AbstractVector{ComplexF64} -> begin
 			y = reshape(y, num_x, num_channels, num_dynamic)
-			SHy = sum(@. conj(sensitivities) * y; dims=2)
+			SHy = zeros(ComplexF64, num_x, num_dynamic)
+			for n = 1:num_dynamic, c = 1:num_channels
+				Threads.@threads for x = 1:num_x
+					@inbounds SHy[x, n] += conj(sensitivities[x, c, 1]) * y[x, c, n]
+				end
+			end
 			vec(SHy)
 		end,
 		output_dimension, input_dimension

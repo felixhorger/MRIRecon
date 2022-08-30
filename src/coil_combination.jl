@@ -1,59 +1,73 @@
 
-function root_sum_of_squares(signals::AbstractArray{<: Number}, dim::Val{N}) where N
-	result = dropdims(sum(abs2, signals; dims=N); dims=N)
+function root_sum_of_squares(imagespace::AbstractArray{<: Number}; dim::Integer)
+	result = dropdims(sum(abs2, imagespace; dims=dim); dims=dim)
 	@. result = sqrt(result)
 end
 
 function roemer(
-	signals::AbstractArray{<: Number},
-	sensitivity::AbstractArray{<: Number},
-	dim::Val{N}=Val(1)
-) where N
+	imagespace::AbstractArray{<: Number},
+	sensitivity::AbstractArray{<: Number};
+	dim::Integer
+)
 	dropdims(
-		sum(conj.(sensitivity) .* signals; dims=N) ./ sum(abs2, sensitivity; dims=N);
-		dims=N
+		sum(conj.(sensitivity) .* imagespace; dims=dim) ./ sum(abs2, sensitivity; dims=dim);
+		dims=dim
 	)
 end
 
 
 """
 See Zhang2012
-kspace[readout, channels, other spatial dims]
-kspace needs to be disentangled along readout direction!
-returns compression matrices C[channels, virtual channels, readout] and σ[(virtual) channels, readout], sorted largest to lowest
+kspace[channels, spatial dims]
+returns compression matrices C[virtual channels, channels] and σ[(virtual) channels], sorted largest to lowest
 no cut-off performed!
-User needs to choose subset of columns of U
+User needs to choose subset of columns of C
 """
-function channel_compression_matrix(kspace::AbstractArray{<: Complex, 3})
-	num = size(kspace, 1) # number of independent "slices"
-	channels = size(kspace, 2)
-	C = Array{ComplexF64, 3}(undef, channels, channels, num)
-	σ = Array{Float64, 2}(undef, channels, num)
-	@views for i = 1:num
-		D = kspace[i, :, :]
-		F = eigen(Hermitian(D * D'); sortby=-)
-		C[:, :, i] = F.vectors'
-		@. σ[:, i] = map((λ -> λ < 0 ? 0 : sqrt(λ)), F.values)
-		# Note: if the singular values of D are small, then some of the eigenvalues (small absolute value)
-		# of D * D' turn out negative, need to mask those
-	end
-	return C, σ
+function channel_compression_matrix(D::AbstractMatrix{<: Complex})
+	channels = size(kspace, 1)
+	C = Matrix{ComplexF64}(undef, channels, channels)
+	σ = Vector{Float64}(undef, channels)
+	return channel_compression_matrix!(C, σ, D)
+end
+function channel_compression_matrix!(
+	C::AbstractMatrix{<: Complex},
+	σ::AbstractVector{<: Real},
+	D::AbstractMatrix{<: Complex} # data matrix D[channels, other dims]
+)
+	F = eigen(Hermitian(D * D'); sortby=-)
+	C .= F.vectors'
+	map!((λ -> λ < 0 ? 0 : sqrt(λ)), σ, F.values)
+	# Note: if the singular values of D are small, then some of the eigenvalues (small absolute value)
+	# of D * D' turn out negative, need to mask those
+	return
 end
 
 
 """
 	σ needs to be sorted largest to lowest
+	ε is the relative threshold w.r.t. the maximum eigenvalue
+	q is which quantile must be above
 """
-@views function cut_virtual_channels(C::AbstractArray{<: Complex, 3}, σ::AbstractMatrix{<: Real}, ε::Real)
+@views function cut_virtual_channels(C::AbstractArray{<: Complex, 3}, σ::AbstractMatrix{<: Real}, ε::Real, q::Real)
 	@assert 0 < ε < 1
 	thresholds = ε .* σ[1, :]
 	num = size(σ, 2)
+	required_num_smaller = Int(ceil(q * num))
 	n = 0
 	for i = 1:size(σ, 1)
-		all(j -> σ[i, j] < thresholds[j], 1:num) && break
+		num_smaller = 0
+		for j = 1:num
+			if σ[i, j] < thresholds[j]
+				num_smaller += 1
+				if num_smaller ≥ required_num_smaller
+					@goto finish
+				end
+			end
+		end
 		n += 1
 	end
-	n > size(σ, 1) && error("No compression possible")
+	@label finish
+	n == size(σ, 1) && error("No compression possible")
 	C_cut = Array{ComplexF64, 3}(undef, n, size(C, 2), num)
 	C_cut .= C[1:n, :, :]
 	return C_cut
@@ -61,7 +75,7 @@ end
 
 
 """
-	C[channels, virtual channels, slices]
+	C[virtual channels, channels, slices]
 	returns C_aligned
 """
 #, R
@@ -107,26 +121,86 @@ function align_channels(C::AbstractArray{<: Complex, 3}, R::AbstractArray{<: Com
 	return C_aligned
 end
 
+convenient_compression_matrix(C::AbstractArray{<: Number, 3}, dim::Val{1}) = permutedims(C, (2, 1, 3))
+convenient_compression_matrix(C::AbstractArray{<: Number, 3}, dim::Val{2}) = permutedims(C, (3, 2, 1)) 
+convenient_compression_matrix(C::AbstractArray{<: Number, 3}, dim::Val{3}) = permutedims(C, (2, 3, 1)) 
+
 """
-	kspace[readout spatial (transformed), channels, other spatial dims]
+	kspace[channels, spatial dims, slices]
+	C[channels, virtual_channels, slices]
+	dim is where the channels are
 """
-function apply_channel_compression(kspace::AbstractArray{T, 3}, C::AbstractArray{<: Complex, 3}) where T <: Complex
-	num = size(kspace, 1)
-	#compressed_kspace = similar(kspace, num, size(C, 1), size(kspace, 3))
-	# compressed_kspace[virtual channels, other dims, readout]
-	channels = size(kspace, 2)
-	virtual_channels = size(C, 1)
-	other_spatial = size(kspace, 3)
-	compressed_kspace = zeros(T, num, virtual_channels, other_spatial)
-	for v = 1:virtual_channels, m = 1:other_spatial
-		for n = 1:num, c = 1:channels
-			@inbounds @fastmath compressed_kspace[n, v, m] += C[v, c, n] * kspace[n, c, m]
-		end
+function apply_channel_compression(
+	kspace::AbstractArray{T, 3},
+	C::AbstractArray{<: Complex, 3},
+	dim::Val{1}
+) where T <: Complex
+	num_channels, num_spatial, num_slices = size(kspace)
+	num_virtual_channels = size(C, 2)
+	@assert size(C, 1) == num_channels
+	@assert size(C, 3) == num_slices
+	compressed_kspace = zeros(T, num_virtual_channels, num_spatial, num_slices)
+	for n = 1:num_slices, v = 1:num_virtual_channels, m = 1:num_spatial, c = 1:num_channels
+		compressed_kspace[v, m, n] += C[c, v, n] * kspace[c, m, n]
 	end
-	#kspace2_rvs = sum_c C_vcr * kspace_rcs
-	#for i = 1:num
-	#	@views mul!(compressed_kspace[i, :, :], C[:, :, i], kspace[i, :, :])
-	#end
 	return compressed_kspace
 end
 
+"""
+	kspace[slices, channels, spatial dims]
+	C[slices, channels, virtual_channels]
+	dim is where the channels are
+"""
+function apply_channel_compression(
+	kspace::AbstractArray{T, 3},
+	C::AbstractArray{<: Complex, 3},
+	dim::Val{2}
+) where T <: Complex
+	num_slices, num_channels, num_spatial = size(kspace)
+	num_virtual_channels = size(C, 3)
+	@assert size(C, 2) == num_channels
+	@assert size(C, 1) == num_slices
+	compressed_kspace = zeros(T, num_slices, num_virtual_channels, num_spatial)
+	for m = 1:num_spatial, v = 1:num_virtual_channels, c = 1:num_channels, n = 1:num_slices
+		compressed_kspace[n, v, m] += C[n, c, v] * kspace[n, c, m]
+	end
+	return compressed_kspace
+end
+"""
+	kspace[spatial dims, slices, channels]
+	C[channels, virtual_channels, slices]
+	dim is where the channels are
+"""
+function apply_channel_compression(
+	kspace::AbstractArray{T, 3},
+	C::AbstractArray{<: Complex, 3},
+	dim::Val{3}
+) where T <: Complex
+	num_spatial, num_slices, num_channels = size(kspace)
+	num_virtual_channels = size(C, 2)
+	@assert size(C, 1) == num_channels
+	@assert size(C, 3) == num_slices
+	compressed_kspace = zeros(T, num_spatial, num_slices, num_virtual_channels)
+	for v = 1:num_virtual_channels, c = 1:num_channels, n = 1:num_slices, m = 1:num_spatial
+		compressed_kspace[m, n, v] += C[c, v, n] * kspace[m, n, c]
+	end
+	return compressed_kspace
+end
+
+
+function apply_channel_compression(
+	kspace::AbstractArray{T, N},
+	C::AbstractArray{<: Complex, 3},
+	dims::Val{NTuple{N, Integer}}
+) where {T <: Complex, N}
+	# dims indicates which dimension is what (spatial, channel slice). What about C?
+	num_spatial, num_slices, num_channels = size(kspace)
+	num_virtual_channels = size(C, 2)
+	@assert size(C, 1) == num_channels
+	@assert size(C, 3) == num_slices
+	compressed_kspace = zeros(T, num_spatial, num_slices, num_virtual_channels)
+	for v = 1:num_virtual_channels, c = 1:num_channels, n = 1:num_slices, m = 1:num_spatial
+		compressed_kspace[m, n, v] += C[c, v, n] * kspace[m, n, c]
+	end
+	return compressed_kspace
+end

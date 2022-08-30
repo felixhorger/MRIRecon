@@ -7,6 +7,7 @@ module MRIRecon
 	using LinearMaps
 	using MRIHankel
 	using Base.Cartesian
+	import DSP
 
 	include("fourier.jl")
 	include("masking.jl")

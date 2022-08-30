@@ -1,7 +1,7 @@
 
 # Sorry, the quality of commenting/documentation is low
-#using Revise
-#using ImageView
+using Revise
+using ImageView
 #import PyPlot as plt
 using Test
 using IterativeSolvers
@@ -39,17 +39,28 @@ function run_espirit_python()
 	calibration_area = (24, 24)
 	kernelsize = (6, 6)
 	centre = MRIRecon.centre_indices.(shape, calibration_area)
+	calibration = data[centre..., :]
 	σ_cut = 0.01
 	λ_cut = 0.9925
-	sensitivities = MRIRecon.estimate_sensitivities(Val(:ESPIRIT), data[centre..., :], shape, kernelsize, σ_cut, λ_cut)
-	recon = ifft(ifftshift(data, (1, 2)), (1, 2))
+	sensitivities = MRIRecon.estimate_sensitivities(
+		Val(:ESPIRIT),
+		calibration,
+		shape,
+		kernelsize,
+		σ_cut,
+		λ_cut
+	)
+	# Shift
+	sensitivities = fftshift(sensitivities, (1, 2))
+	# Reconstruct
+	recon = fftshift(ifft(ifftshift(data, (1, 2)), (1, 2)), (1, 2))
 	projection = sensitivities .* sum(recon .* conj.(sensitivities); dims=3)
-	return sensitivities, py_sensitivities, recon, projection
+	return sensitivities, py_sensitivities, projection, recon, calibration
 end
 
 # ESPIRiT
-rel_diff_recon_projection, rel_diff_to_python = let
-	(sensitivities, py_sensitivities, recon, projection) = run_espirit_python()
+rel_diff_recon_projection, rel_diff_to_python, sensitivities, py_sensitivities, recon, calibration = let
+	(sensitivities, py_sensitivities, projection, recon, calibration) = run_espirit_python()
 	# Leave all the plots in here in case of and issue
 	#imshow(abs.(sensitivities))
 	#imshow(abs.(py_sensitivities))
@@ -59,8 +70,6 @@ rel_diff_recon_projection, rel_diff_to_python = let
 	#plt.figure()
 	#plt.imshow(abs.(projection .- recon)[:, :, 1]; vmin, vmax)
 	# Compare against the python implementation
-	# Shift
-	sensitivities = fftshift(sensitivities, 1:2)
 	# Compute absolute values, masking according to the python version
 	# this is necessary since this here implements a smooth transition, see Uecker2013a
 	zero_indices = py_sensitivities .== 0
@@ -70,10 +79,37 @@ rel_diff_recon_projection, rel_diff_to_python = let
 	abs_py_sensitivities[zero_indices] .= 1
 	rel_diff_to_python = vec(@. 2 * abs(abs_sensitivities - abs_py_sensitivities) / (abs_sensitivities + abs_py_sensitivities))
 	# Return
-	rel_diff_recon_projection, rel_diff_to_python
+	rel_diff_recon_projection, rel_diff_to_python, sensitivities, py_sensitivities, recon, calibration
 end
 @test all(rel_diff_recon_projection .< 5e-2)
 @test 3e-2 > quantile(rel_diff_to_python, 0.99)
+
+
+
+let sensitivities = fftshift(MRIRecon.estimate_sensitivities(Val(:Direct), calibration), 1:2)
+	imshow(angle.(sensitivities))
+end
+
+# Reconstruct with both profiles
+reldiff, indices = let
+	recons = Vector{Any}(undef, 2)
+	for (i, s) in enumerate((sensitivities, py_sensitivities))
+		S = MRIRecon.plan_sensitivities(s, 1)
+		backprojection = S' * vec(recon)
+		A = S' * S
+		x = cg(A, backprojection; maxiter=100)
+		y = reshape(x, size(recon)[1:2])
+		recons[i] = y
+	end
+	reference = abs.(recons[2])
+	diff = abs.(recons[1]) .- reference
+	indices = reference .== 0
+	reference[indices] .= 1
+	diff[indices] .= 0
+	reldiff = diff ./ reference
+	reldiff, py_sensitivities[:, :, 1] .!= 0
+end
+@test quantile(reldiff[indices], 0.99) < 0.02
 
 
 

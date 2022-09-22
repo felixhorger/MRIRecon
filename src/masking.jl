@@ -1,3 +1,4 @@
+# TODO: rename sampling
 
 """
 	dense sampling mask
@@ -18,7 +19,7 @@ end
 
 """
 	Given indices which are sampled, find the ones which are not sampled.
-	Spatial shape and indices must be sorted,
+	indices must be sorted
 
 	Indices outside shape are ignored!
 """
@@ -165,9 +166,14 @@ function sparse2dense(
 	num_dynamic::Integer
 ) where N
 	@assert size(a, 3) == length(indices)
+	linear_indices = LinearIndices(shape)
+	perm = sortperm(indices; by=(k::CartesianIndex{N} -> linear_indices[k]))
 	b = zeros(eltype(a), size(a, 1), size(a, 2), shape..., num_dynamic)
-	for (i, j) in enumerate(indices)
-		b[:, :, j, mod1(i, num_dynamic)] = a[:, :, i]
+	for i in eachindex(perm)
+		j = perm[i]
+		dynamic = mod1(j, num_dynamic)
+		k = indices[j]
+		@views b[:, :, k, dynamic] = a[:, :, j]
 	end
 	return b
 end
@@ -181,11 +187,16 @@ function sparse2dense_trunc(
 	num_dynamic::Integer
 ) where N
 	@assert size(a, 3) == length(indices)
-	b = zeros(eltype(a), size(a, 1), size(a, 2), roi_shape..., num_dynamic)
+	linear_indices = LinearIndices(shape)
+	perm = sortperm(indices; by=(k::CartesianIndex{N} -> linear_indices[k]))
 	offset = CartesianIndex(ntuple(d -> roi[d][1] - 1, N))
-	for (i, j) in enumerate(indices)
-		any(ntuple(d -> j[d] ∉ roi[d], N)) && continue
-		b[:, :, j - offset, mod1(i, num_dynamic)] = a[:, :, i]
+	b = zeros(eltype(a), size(a, 1), size(a, 2), roi_shape..., num_dynamic)
+	for i in eachindex(perm)
+		j = perm[i]
+		k = indices[j]
+		any(ntuple(d -> k[d] ∉ roi[d], N)) && continue
+		dynamic = mod1(j, num_dynamic)
+		@views b[:, :, k - offset, dynamic] = a[:, :, j]
 	end
 	return b
 end

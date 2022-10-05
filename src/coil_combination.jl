@@ -34,7 +34,8 @@ function channel_compression_matrix!(
 	σ::AbstractVector{<: Real},
 	D::AbstractMatrix{<: Complex} # data matrix D[channels, other dims]
 )
-	F = eigen(Hermitian(D * D'); sortby=-)
+	mul!(C, D, D') # Use memory provided by user
+	F = eigen(Hermitian(C); sortby=-)
 	C .= F.vectors'
 	map!((λ -> λ < 0 ? 0 : sqrt(λ)), σ, F.values)
 	# Note: if the singular values of D are small, then some of the eigenvalues (small absolute value)
@@ -140,8 +141,10 @@ function apply_channel_compression(
 	@assert size(C, 1) == num_channels
 	@assert size(C, 3) == num_slices
 	compressed_kspace = zeros(T, num_virtual_channels, num_spatial, num_slices)
-	for n = 1:num_slices, v = 1:num_virtual_channels, m = 1:num_spatial, c = 1:num_channels
-		compressed_kspace[v, m, n] += C[c, v, n] * kspace[c, m, n]
+	Threads.@threads for n = 1:num_slices
+		for v = 1:num_virtual_channels, m = 1:num_spatial, c = 1:num_channels
+			compressed_kspace[v, m, n] += C[c, v, n] * kspace[c, m, n]
+		end
 	end
 	return compressed_kspace
 end
@@ -161,8 +164,10 @@ function apply_channel_compression(
 	@assert size(C, 2) == num_channels
 	@assert size(C, 1) == num_slices
 	compressed_kspace = zeros(T, num_slices, num_virtual_channels, num_spatial)
-	for m = 1:num_spatial, v = 1:num_virtual_channels, c = 1:num_channels, n = 1:num_slices
-		compressed_kspace[n, v, m] += C[n, c, v] * kspace[n, c, m]
+	Threads.@threads for m = 1:num_spatial
+		for v = 1:num_virtual_channels, c = 1:num_channels, n = 1:num_slices
+			compressed_kspace[n, v, m] += C[n, c, v] * kspace[n, c, m]
+		end
 	end
 	return compressed_kspace
 end
@@ -181,8 +186,10 @@ function apply_channel_compression(
 	@assert size(C, 1) == num_channels
 	@assert size(C, 3) == num_slices
 	compressed_kspace = zeros(T, num_spatial, num_slices, num_virtual_channels)
-	for v = 1:num_virtual_channels, c = 1:num_channels, n = 1:num_slices, m = 1:num_spatial
-		compressed_kspace[m, n, v] += C[c, v, n] * kspace[m, n, c]
+	Threads.@threads for v = 1:num_virtual_channels
+		for c = 1:num_channels, n = 1:num_slices, m = 1:num_spatial
+			compressed_kspace[m, n, v] += C[c, v, n] * kspace[m, n, c]
+		end
 	end
 	return compressed_kspace
 end

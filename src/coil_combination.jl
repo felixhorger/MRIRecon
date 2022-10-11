@@ -143,7 +143,7 @@ function apply_channel_compression(
 	compressed_kspace = zeros(T, num_virtual_channels, num_spatial, num_slices)
 	Threads.@threads for n = 1:num_slices
 		for v = 1:num_virtual_channels, m = 1:num_spatial, c = 1:num_channels
-			compressed_kspace[v, m, n] += C[c, v, n] * kspace[c, m, n]
+			@inbounds compressed_kspace[v, m, n] += C[c, v, n] * kspace[c, m, n]
 		end
 	end
 	return compressed_kspace
@@ -166,7 +166,7 @@ function apply_channel_compression(
 	compressed_kspace = zeros(T, num_slices, num_virtual_channels, num_spatial)
 	Threads.@threads for m = 1:num_spatial
 		for v = 1:num_virtual_channels, c = 1:num_channels, n = 1:num_slices
-			compressed_kspace[n, v, m] += C[n, c, v] * kspace[n, c, m]
+			@inbounds compressed_kspace[n, v, m] += C[n, c, v] * kspace[n, c, m]
 		end
 	end
 	return compressed_kspace
@@ -188,7 +188,7 @@ function apply_channel_compression(
 	compressed_kspace = zeros(T, num_spatial, num_slices, num_virtual_channels)
 	Threads.@threads for v = 1:num_virtual_channels
 		for c = 1:num_channels, n = 1:num_slices, m = 1:num_spatial
-			compressed_kspace[m, n, v] += C[c, v, n] * kspace[m, n, c]
+			@inbounds compressed_kspace[m, n, v] += C[c, v, n] * kspace[m, n, c]
 		end
 	end
 	return compressed_kspace

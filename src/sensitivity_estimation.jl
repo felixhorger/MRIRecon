@@ -423,6 +423,8 @@ end
 
 
 
+
+
 function compute_window(
 	shape::NTuple{N, Integer},
 	window::Function
@@ -452,19 +454,11 @@ function apply_window!(
 	return
 end
 
-
-"""
-	1) Apply window to calibration in kspace (remove Gibbs ringing)
-	2) Inverse Fourier transform
-	3) Divide by root sum of squares
-"""
-function estimate_sensitivities(
-	method::Val{:Direct},
+function direct_unnormalised_sensitivities(
 	calibration::AbstractArray{T, N},
 	outshape::NTuple{M, Integer}
 ) where {N, M, T <: Number}
 	@assert M == N-1
-
 	shape = size(calibration)[1:M]
 	num_channels = size(calibration, N)
 
@@ -485,12 +479,54 @@ function estimate_sensitivities(
 	centre_indices = MRIRecon.centre_indices.(outshape, shape)
 	padded[centre_indices..., :] = calibration
 	sensitivities = ifft(ifftshift(padded, 1:M), 1:M)
+	rsos = root_sum_of_squares(sensitivities; dim=N)
+	return sensitivities, rsos
+end
+
+function direct_normalise_sensitivities!(
+	sensitivities::AbstractArray{<: Number, N},
+	rsos::AbstractArray{<: Real, M},
+	outshape::NTuple{M, Integer},
+	cut::Real,
+	tol::Real
+) where {N, M}
+	@assert M == N-1 # Channels are not in rsos or outshape
+	@assert 0 ≤ cut ≤ 1
+	@assert 0 < tol
 
 	# Normalise with root sum of squares
+	maxi = maximum(rsos)
+	cut *= maxi
+	tol *= maxi
+	inv_tol = 1 / tol
 	for x in CartesianIndices(outshape)
-		@views sensitivities[x, :] ./= sqrt(sum(abs2, sensitivities[x, :]))
+		normalisation = rsos[x]
+		attenuation = smooth_step((normalisation - cut + tol) * inv_tol)
+		if normalisation == 0
+			factor = 0.0
+		else
+			factor = attenuation / normalisation
+		end
+		sensitivities[x, :] .*= factor
 	end
+	return sensitivities
+end
 
+"""
+	1) Apply window to calibration in kspace (remove Gibbs ringing)
+	2) Inverse Fourier transform
+	3) Divide by root sum of squares
+"""
+function estimate_sensitivities(
+	method::Val{:Direct},
+	calibration::AbstractArray{T, N},
+	outshape::NTuple{M, Integer},
+	cut::Real,
+	tol::Real
+) where {N, M, T <: Number}
+
+	sensitivities, rsos = direct_unnormalised_sensitivities(calibration, outshape)
+	sensitivities = direct_normalise_sensitivities!(sensitivities, rsos, outshape, cut, tol)
 	return sensitivities
 end
 

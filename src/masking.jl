@@ -136,18 +136,16 @@ function plan_masking(
 	end
 
 	# Construct linear operator
-	MHM = LinearMap{ComplexF64}(
-		x::AbstractVector{<: Complex} -> begin
+	U = HermitianOperator(
+		prod(target_shape),
+		x -> begin
 			x_in_shape = reshape(x, target_shape)
 			apply_sparse_mask!(x_in_shape, indices_to_mask)
 			x
-		end,
-		prod(target_shape),
-		ishermitian=true,
-		issymmetric=true
+		end
 	)
 
-	return MHM
+	return U
 end
 
 

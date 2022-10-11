@@ -4,9 +4,10 @@ module MRIRecon
 	using FFTW
 	using FINUFFT
 	using LinearAlgebra
-	using LinearMaps
+	using LinearOperators
 	using MRIHankel
 	using Base.Cartesian
+	using LoopVectorization
 	import DSP
 
 	include("fourier.jl")

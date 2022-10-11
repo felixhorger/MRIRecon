@@ -16,37 +16,46 @@ function plan_fourier_transform(
 	FFT = plan_fft(arr, dims; kwargs...)
 	FFTH = inv(FFT)
 	restore_shape(x) = reshape(x, shape) # Note that x is Vector
-	F = LinearMap{ComplexF64}(
+	F = UnitaryOperator(
+		prod(shape),
 		x -> begin
 			x = restore_shape(x)
 			y = FFT * x
 			vec(y)
 		end,
-		y -> let
+		y -> begin
 			y = restore_shape(y)
 			x = FFTH * y
 			vec(x)
-		end,
-		prod(shape)
+		end
 	)
 	return F
 end
 
 
-function plan_fourier_transform(
-	kx::Vector{<: Number},
-	ky::Vector{<: Number},
+"""
+	Not side effect free
+"""
+function plan_fourier_transform!(k1, k2, shape::NTuple{3, Integer}, eps, dtype::Type{T}) where T
+	FHy = Array{T, 3}(undef, shape)
+	return plan_fourier_transform!(k1, k2, shape, eps, dtype, FHy)
+end
+function plan_fourier_transform!(
+	FHy::Array{Complex{T}, 3},
+	k1::Vector{<: Number},
+	k2::Vector{<: Number},
 	shape::NTuple{3, Integer},
 	eps::Real,
-	dtype::Type
-)
+	dtype::Type{T}
+) where T
 
 	# Get dims
-	num_frequencies = length(kx)
-	@assert length(ky) == num_frequencies
+	num_frequencies = length(k1)
+	@assert length(k2) == num_frequencies
 	spatial_dims = [shape[1], shape[2]]
 	spatial_length = prod(spatial_dims)
 	other_dims = shape[3] 
+	@assert size(FHy) == shape
 
 	# Plan NUFFT
 	forward_plan = finufft_makeplan(
@@ -74,24 +83,32 @@ function plan_fourier_transform(
 		end
 	end
 	normalisation = 1 / spatial_length
-	finufft_setpts!(forward_plan, kx, ky)
-	finufft_setpts!(backward_plan, kx, ky)
+	finufft_setpts!(forward_plan, k1, k2)
+	finufft_setpts!(backward_plan, k1, k2)
 
-	F = LinearMap{ComplexF64}(
+	# Allocate output
+	Fx = Array{ComplexF64, 2}(undef, num_frequencies, other_dims)
+	vec_Fx = vec(Fx)
+	vec_FHy = vec(FHy)
+
+	# Linear operators
+	F = LinearOperator(
+		(num_frequencies * other_dims, spatial_length * other_dims),
 		x -> begin
 			x = reshape(x, shape)
-			y = finufft_exec(forward_plan, x)
-			vec(y)
+			finufft_exec!(forward_plan, x, Fx)
+			vec_Fx
 		end,
-		y -> let
+		y -> begin
 			y = reshape(y, num_frequencies, other_dims)
-			x = finufft_exec(backward_plan, y) * normalisation
-			vec(x)
-		end,
-		num_frequencies * other_dims, # in
-		spatial_length * other_dims # out
+			finufft_exec!(backward_plan, y, FHy)
+			# TODO: LoopVectorization
+			Threads.@threads for i in eachindex(FHy)
+				@inbounds FHy[i] *= normalisation
+			end
+			vec_FHy
+		end
 	)
-
 	return F
 end
 

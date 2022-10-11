@@ -1,46 +1,59 @@
 
 """
 	sensitivities[spatial dimensions..., channels]
+	not side effect free
 """
-function plan_sensitivities(
+function plan_sensitivities!(
 	sensitivities::AbstractArray{<: Number, N},
 	num_dynamic::Integer
 ) where N
 	# Get dimensions
 	shape = size(sensitivities)
 	num_channels = shape[N]
-	num_x = prod(shape[1:N-1])
-	input_dimension = num_x * num_dynamic
-	output_dimension = input_dimension * num_channels
+	num_spatial = prod(shape[1:N-1])
+	input_dim = num_spatial * num_dynamic
+	output_dim = input_dim * num_channels
 
 	# Reshape
-	sensitivities = reshape(sensitivities, num_x, num_channels, 1)
+	sensitivities = reshape(sensitivities, num_spatial, num_channels)
 
-	S = LinearMap{ComplexF64}( # Note: This is not really julian! Type is checked in LinearMap :(
-		x::AbstractVector{ComplexF64} -> begin
-			Sx = sensitivities .* reshape(x, num_x, 1, num_dynamic)
-			vec(Sx)
-		end,
-		y::AbstractVector{ComplexF64} -> begin
-			y = reshape(y, num_x, num_channels, num_dynamic)
-			SHy = zeros(ComplexF64, num_x, num_dynamic)
-			for n = 1:num_dynamic, c = 1:num_channels
-				Threads.@threads for x = 1:num_x
-					@inbounds SHy[x, n] += conj(sensitivities[x, c, 1]) * y[x, c, n]
+	# Allocate
+	Sx = Array{ComplexF64, 3}(undef, num_spatial, num_channels, num_dynamic)
+	SHy = Array{ComplexF64, 2}(undef, num_spatial, num_dynamic)
+	vec_Sx = vec(Sx)
+	vec_SHy = vec(SHy)
+
+	# TODO: make a reallocating version of this
+	S = LinearOperator(
+		(output_dim, input_dim),
+		x -> begin
+			x = reshape(x, num_spatial, num_dynamic)
+			for t = 1:num_dynamic, c = 1:num_channels
+				Threads.@threads for i = 1:num_spatial
+					@inbounds Sx[i, c, t] = sensitivities[i, c] * x[i, t]
 				end
 			end
-			vec(SHy)
+			vec_Sx
 		end,
-		output_dimension, input_dimension
+		y -> begin
+			y = reshape(y, num_spatial, num_channels, num_dynamic)
+			SHy .= 0
+			for n = 1:num_dynamic, c = 1:num_channels
+				Threads.@threads for i = 1:num_spatial
+					@inbounds SHy[i, n] += conj(sensitivities[i, c]) * y[i, c, n]
+				end
+			end
+			vec_SHy
+		end
 	)
-	return S
+	return S, reshape(Sx, shape..., num_dynamic)
 end
 
 """
-	plan_PSF(F::LinearMap, M::LinearMap [, S::LinearMap])
+	plan_PSF(F::AbstractLinearOperator, M::AbstractLinearOperator [, S::AbstractLinearOperator])
 """
-plan_psf(M::LinearMap, F::LinearMap) = F' * M * F
-plan_psf(M::LinearMap, F::LinearMap, S::LinearMap) = S' * F' * M * F * S
+plan_psf(M::AbstractLinearOperator, F::AbstractLinearOperator) = F' * M * F
+plan_psf(M::AbstractLinearOperator, F::AbstractLinearOperator, S::AbstractLinearOperator) = S' * F' * M * F * S
 
 
 """

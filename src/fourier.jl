@@ -36,17 +36,19 @@ end
 """
 	Not side effect free
 """
-function plan_fourier_transform!(k1, k2, shape::NTuple{3, Integer}, eps, dtype::Type{T}) where T
-	FHy = Array{T, 3}(undef, shape)
-	return plan_fourier_transform!(k1, k2, shape, eps, dtype, FHy)
+function plan_fourier_transform(k1, k2, shape::NTuple{3, Integer}; eps::Real=1e-8, dtype::Type{T}=Float64, kwargs...) where T
+	FHy = Array{Complex{T}, 3}(undef, shape)
+	return plan_fourier_transform!(FHy, k1, k2, shape; dtype, kwargs...)
 end
 function plan_fourier_transform!(
 	FHy::Array{Complex{T}, 3},
 	k1::Vector{<: Number},
 	k2::Vector{<: Number},
-	shape::NTuple{3, Integer},
-	eps::Real,
-	dtype::Type{T}
+	shape::NTuple{3, Integer};
+	eps::Real=1e-8,
+	dtype::Type{T}=Float64,
+	upsampling=2,
+	kwargs...
 ) where T
 
 	# Get dims
@@ -64,7 +66,9 @@ function plan_fourier_transform!(
 		-1, # iflag
 		other_dims, # ntrans
 		eps; # eps
-		dtype
+		dtype,
+		upsampfac=upsampling,
+		kwargs...
 	)
 	backward_plan = finufft_makeplan(
 		1, # type
@@ -72,7 +76,9 @@ function plan_fourier_transform!(
 		1, # iflag
 		other_dims, # ntrans
 		eps; # eps
-		dtype
+		dtype,
+		upsampfac=upsampling,
+		kwargs...
 	)
 	for plan in (forward_plan, backward_plan)
 		# This should go into the finufft package
@@ -87,7 +93,7 @@ function plan_fourier_transform!(
 	finufft_setpts!(backward_plan, k1, k2)
 
 	# Allocate output
-	Fx = Array{ComplexF64, 2}(undef, num_frequencies, other_dims)
+	Fx = Array{Complex{T}, 2}(undef, num_frequencies, other_dims)
 	vec_Fx = vec(Fx)
 	vec_FHy = vec(FHy)
 
@@ -110,6 +116,57 @@ function plan_fourier_transform!(
 		end
 	)
 	return F
+end
+function plan_toeplitz_embedding(
+	k1::Vector{<: Number},
+	k2::Vector{<: Number},
+	shape::NTuple{3, Integer};
+	dtype::Type{T}=Float64,
+	weights::AbstractVector{<: Number}=ones(Complex{dtype}, length(k1)),
+	eps::Real=1e-8,
+	upsampling::Integer=2,
+	finufft_kwargs::Dict=Dict(),
+	fftw_flags=FFTW.MEASURE
+) where T
+	@assert length(k1) == length(k2) == length(weights)
+	upsampled_shape = upsampling .* shape[1:2]
+	num_x = prod(shape[1:2])
+
+	# Compute convolution function (essentially point-spread-function)
+	q = nufft2d1(
+		k1, k2,
+		(weights ./ num_x),
+		1,
+		eps,
+		upsampled_shape...;
+		dtype,
+		modeord=1, # Required to get the "fftshifted" version
+		upsampfac=upsampling,
+		finufft_kwargs...
+	)
+	# Plan convolution operator
+	C, y_padded = plan_circular_convolution((upsampled_shape..., shape[3]), q, 1:2; flags=fftw_flags)
+
+	# Allocate memory
+	x_padded = Array{Complex{T}, 3}(undef, upsampled_shape..., shape[3])
+	vec_x_padded = vec(x_padded)
+	y = Array{Complex{T}, 3}(undef, shape)
+	vec_y = vec(y)
+	centre = MRIRecon.centre_indices.(upsampled_shape, shape[1:2])
+	centre_of_y_padded = @view y_padded[centre..., :]
+
+	# Toeplitz Embedding
+	FHF = HermitianOperator(
+		num_x * shape[3],
+		x -> begin
+			@inbounds x_padded[centre..., :] = x
+			vec_y_padded = C * vec_x_padded
+			# Basically: y_padded = reshape(vec_y_padded, upsampled_shape..., shape[3])
+			@inbounds vec_y[:] = centre_of_y_padded
+			vec_y
+		end
+	)
+	return FHF
 end
 
 
@@ -176,7 +233,7 @@ function shift_half_fov!(kspace::AbstractArray{<: Number, N}, dims) where N
 			kspace[K] *= -1
 		end
 	end
-	return
+	return kspace
 end
 
 
@@ -201,7 +258,7 @@ function shift_fov!(
 		phase_modulation[k] = prod(exponentials .^ exponent)
 	end
 	kspace .*= phase_modulation
-	return
+	return kspace
 end
 function shift_fov!(
 	kspace::AbstractArray{<: Number},
@@ -213,7 +270,7 @@ function shift_fov!(
 	# Precompute phase modulation
 	phase_modulation = exp.(-im .* (k' * shift))
 	kspace .*= phase_modulation
-	return
+	return kspace
 end
 
 
@@ -302,6 +359,35 @@ for (func, op) in ( (:fftshift, :(.+)), (:ifftshift, :(.-)) )
 end
 
 
+"""
+	Not side effect free
+"""
+function plan_circular_convolution(shape::NTuple{N, Integer}, c::AbstractArray{<: Number, M}, dims::Union{Integer, NTuple{D, Integer}, AbstractVector}; kwargs...) where {N, M, D}
+	# Array for in-place operations
+	Fx = Array{ComplexF64, N}(undef, shape)
+	vec_xc = vec(Fx)
+	# Plan Fourier
+	F = plan_fft(Fx, dims; kwargs...)
+	FH = plan_bfft!(Fx, dims; kwargs...) # In-place
+	# Precompute kernel, cannot use F in general due to different shapes.
+	Fc = fft(c, dims) ./ prod(shape[1:N-1]) # fft normalisation included here
+	# Define convolution operator
+	C = HermitianOperator(
+		prod(shape),
+		x -> begin
+			mul!(Fx, F, reshape(x, shape))
+			# Compute Fx .*= Fc
+			for J in CartesianIndices(shape[M+1:N])
+				Threads.@threads for I in CartesianIndices(Fc)
+					@inbounds Fx[I, J] *= Fc[I]
+				end
+			end
+			xc = FH * Fx # in-place, so just a change of names
+			vec_xc
+		end
+	)
+	return C, Fx
+end
 """
 	Circular convolution
 	This should be available in DSP.jl

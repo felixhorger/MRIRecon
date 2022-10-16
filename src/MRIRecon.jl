@@ -15,6 +15,7 @@ module MRIRecon
 	include("coil_combination.jl")
 	include("sense.jl")
 	include("sensitivity_estimation.jl")
+	include("grappa.jl")
 
 end
 

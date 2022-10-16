@@ -263,7 +263,7 @@ function espirit_eigenmaps(
 	
 	channels = size(calibration, N)
 	V, σ_squared = espirit_hankel_factorisation(calibration, kernelsize, σ_cut)
-	V_parallel = V #espirit_select_kernels(V, σ_squared, kernelsize, σ_cut)
+	V_parallel = espirit_select_kernels(V, σ_squared, kernelsize, σ_cut)
 	transformed_kernels = espirit_transform_kernels(V_parallel, channels, outshape, kernelsize)
 	v, λ = espirit_eigen(transformed_kernels, num_λ)
 	return v, λ

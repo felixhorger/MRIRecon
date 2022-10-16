@@ -3,7 +3,7 @@
 	sensitivities[spatial dimensions..., channels]
 	not side effect free
 """
-function plan_sensitivities!(
+function plan_sensitivities(
 	sensitivities::AbstractArray{<: Number, N},
 	num_dynamic::Integer
 ) where N

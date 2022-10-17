@@ -12,6 +12,92 @@ import MRIPhantoms
 import MRIRecon
 
 
+# Dimensions
+num_channels = 8
+phase_encoding_shape = (128, 128)
+shape = (128, phase_encoding_shape...)
+
+# Sensitivities
+sensitivities = MRIPhantoms.coil_sensitivities(shape, (4, 2), 0.25)
+
+# Operators and sampling
+S, Sx = MRIRecon.plan_sensitivities(sensitivities, 1)
+
+calibration_area = (32, 32, 32)
+calibration_indices = MRIRecon.centre_indices.(shape, calibration_area)
+sampling_indices = Vector{CartesianIndex{2}}(undef, shape[2] ÷ 2 * shape[3] + (calibration_area[2] * calibration_area[3]) ÷ 2)
+i = 1
+for p = 1:shape[3]
+	for l = 1:shape[2]
+		if mod(l, 2) == 0 || (l in calibration_indices[2] && p in calibration_indices[3])
+			sampling_indices[i] = CartesianIndex(l, p)
+			i += 1
+		end
+	end
+end
+@assert i == length(sampling_indices) + 1
+MRIRecon.is_unique_sampling(sampling_indices, 1)
+
+fftshifted_indices = MRIRecon.fftshift(sampling_indices, shape[2:3])
+unsampled = MRIRecon.unsampled_indices(sampling_indices, shape[2:3])
+unsampled_shifted = fftshift(unsampled, shape[2:3])
+U = MRIRecon.plan_masking(fftshifted_indices, (shape..., num_channels, 1))
+U_unsampled = MRIRecon.plan_masking(unsampled, (shape..., num_channels, 1))
+F = MRIRecon.plan_fourier_transform((shape..., num_channels, 1), 1:3)
+A = MRIRecon.plan_psf(U, F, S)
+GC.gc(true)
+
+# Measure phantom
+upsampling = (2, 2, 2)
+phantom, _ = MRIPhantoms.homogeneous(shape, upsampling)
+kspace = fft(sensitivities .* phantom, 1:3)
+kspace_orig = copy(kspace)
+backprojection = S' * F' * U * vec(kspace)
+phantom_backprojection = A * vec(phantom)
+
+kernelsize = (5, 7, 3)
+neighbours = (
+	CartesianIndex(1, 1, 1), CartesianIndex(1, 3, 1), CartesianIndex(1, 5, 1), CartesianIndex(1, 7, 1),
+	CartesianIndex(2, 1, 1), CartesianIndex(2, 3, 1), CartesianIndex(2, 5, 1), CartesianIndex(2, 7, 1),
+	CartesianIndex(3, 1, 1), CartesianIndex(3, 3, 1), CartesianIndex(3, 5, 1), CartesianIndex(3, 7, 1),
+	CartesianIndex(4, 1, 1), CartesianIndex(4, 3, 1), CartesianIndex(4, 5, 1), CartesianIndex(4, 7, 1),
+	CartesianIndex(5, 1, 1), CartesianIndex(5, 3, 1), CartesianIndex(5, 5, 1), CartesianIndex(5, 7, 1),
+	CartesianIndex(1, 1, 2), CartesianIndex(1, 3, 2), CartesianIndex(1, 5, 2), CartesianIndex(1, 7, 2),
+	CartesianIndex(2, 1, 2), CartesianIndex(2, 3, 2), CartesianIndex(2, 5, 2), CartesianIndex(2, 7, 2),
+	CartesianIndex(3, 1, 2), CartesianIndex(3, 3, 2), CartesianIndex(3, 5, 2), CartesianIndex(3, 7, 2),
+	CartesianIndex(4, 1, 2), CartesianIndex(4, 3, 2), CartesianIndex(4, 5, 2), CartesianIndex(4, 7, 2),
+	CartesianIndex(5, 1, 2), CartesianIndex(5, 3, 2), CartesianIndex(5, 5, 2), CartesianIndex(5, 7, 2),
+	CartesianIndex(1, 1, 3), CartesianIndex(1, 3, 3), CartesianIndex(1, 5, 3), CartesianIndex(1, 7, 3),
+	CartesianIndex(2, 1, 3), CartesianIndex(2, 3, 3), CartesianIndex(2, 5, 3), CartesianIndex(2, 7, 3),
+	CartesianIndex(3, 1, 3), CartesianIndex(3, 3, 3), CartesianIndex(3, 5, 3), CartesianIndex(3, 7, 3),
+	CartesianIndex(4, 1, 3), CartesianIndex(4, 3, 3), CartesianIndex(4, 5, 3), CartesianIndex(4, 7, 3),
+	CartesianIndex(5, 1, 3), CartesianIndex(5, 3, 3), CartesianIndex(5, 5, 3), CartesianIndex(5, 7, 3),
+)
+
+actual_kspace = ifftshift(kspace_orig, 1:3);
+g = MRIRecon.grappa_kernel(actual_kspace[calibration_indices..., :], neighbours, kernelsize);
+masked_kspace = ifftshift(kspace, 1:3);
+completed_kspace = MRIRecon.apply_grappa_kernel!(masked_kspace, g, neighbours, kernelsize, unsampled);
+imshow(log.(1 .+ abs.(completed_kspace)))
+
+recon_grappa = ifft(completed_kspace, 1:3)
+recon_full = ifft(actual_kspace, 1:3)
+imshow(abs.(recon_grappa - recon_full))
+
+imshow(abs.(ifft(ifftshift(completed_kspace, 1:3), 1:3)))
+
+imshow(log.(1 .+ abs.(masked_kspace)))
+imshow(log.(1 .+ abs.(actual_kspace)))
+imshow(log.(1 .+ abs.(actual_kspace[calibration_indices..., :])))
+
+
+
+asd = ones(Bool, shape..., num_channels);
+U_unsampled * vec(asd)
+imshow(asd)
+
+
+
 function run_espirit_python()
 	# Run python version
 	if !isdir("espirit_python")

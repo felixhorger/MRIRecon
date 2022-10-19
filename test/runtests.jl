@@ -55,34 +55,45 @@ kspace_orig = copy(kspace)
 backprojection = S' * F' * U * vec(kspace)
 phantom_backprojection = A * vec(phantom)
 
-kernelsize = (5, 7, 3)
+kernelsize = (7, 7, 3)
 neighbours = (
 	CartesianIndex(1, 1, 1), CartesianIndex(1, 3, 1), CartesianIndex(1, 5, 1), CartesianIndex(1, 7, 1),
 	CartesianIndex(2, 1, 1), CartesianIndex(2, 3, 1), CartesianIndex(2, 5, 1), CartesianIndex(2, 7, 1),
 	CartesianIndex(3, 1, 1), CartesianIndex(3, 3, 1), CartesianIndex(3, 5, 1), CartesianIndex(3, 7, 1),
 	CartesianIndex(4, 1, 1), CartesianIndex(4, 3, 1), CartesianIndex(4, 5, 1), CartesianIndex(4, 7, 1),
 	CartesianIndex(5, 1, 1), CartesianIndex(5, 3, 1), CartesianIndex(5, 5, 1), CartesianIndex(5, 7, 1),
+	CartesianIndex(6, 1, 1), CartesianIndex(6, 3, 1), CartesianIndex(6, 5, 1), CartesianIndex(6, 7, 1),
+	CartesianIndex(7, 1, 1), CartesianIndex(7, 3, 1), CartesianIndex(7, 5, 1), CartesianIndex(7, 7, 1),
 	CartesianIndex(1, 1, 2), CartesianIndex(1, 3, 2), CartesianIndex(1, 5, 2), CartesianIndex(1, 7, 2),
 	CartesianIndex(2, 1, 2), CartesianIndex(2, 3, 2), CartesianIndex(2, 5, 2), CartesianIndex(2, 7, 2),
 	CartesianIndex(3, 1, 2), CartesianIndex(3, 3, 2), CartesianIndex(3, 5, 2), CartesianIndex(3, 7, 2),
 	CartesianIndex(4, 1, 2), CartesianIndex(4, 3, 2), CartesianIndex(4, 5, 2), CartesianIndex(4, 7, 2),
 	CartesianIndex(5, 1, 2), CartesianIndex(5, 3, 2), CartesianIndex(5, 5, 2), CartesianIndex(5, 7, 2),
+	CartesianIndex(6, 1, 2), CartesianIndex(6, 3, 2), CartesianIndex(6, 5, 2), CartesianIndex(6, 7, 2),
+	CartesianIndex(7, 1, 2), CartesianIndex(7, 3, 2), CartesianIndex(7, 5, 2), CartesianIndex(7, 7, 2),
 	CartesianIndex(1, 1, 3), CartesianIndex(1, 3, 3), CartesianIndex(1, 5, 3), CartesianIndex(1, 7, 3),
 	CartesianIndex(2, 1, 3), CartesianIndex(2, 3, 3), CartesianIndex(2, 5, 3), CartesianIndex(2, 7, 3),
 	CartesianIndex(3, 1, 3), CartesianIndex(3, 3, 3), CartesianIndex(3, 5, 3), CartesianIndex(3, 7, 3),
 	CartesianIndex(4, 1, 3), CartesianIndex(4, 3, 3), CartesianIndex(4, 5, 3), CartesianIndex(4, 7, 3),
 	CartesianIndex(5, 1, 3), CartesianIndex(5, 3, 3), CartesianIndex(5, 5, 3), CartesianIndex(5, 7, 3),
+	CartesianIndex(6, 1, 3), CartesianIndex(6, 3, 3), CartesianIndex(6, 5, 3), CartesianIndex(6, 7, 3),
+	CartesianIndex(7, 1, 3), CartesianIndex(7, 3, 3), CartesianIndex(7, 5, 3), CartesianIndex(7, 7, 3),
 )
 
 actual_kspace = ifftshift(kspace_orig, 1:3);
 g = MRIRecon.grappa_kernel(actual_kspace[calibration_indices..., :], neighbours, kernelsize);
 masked_kspace = ifftshift(kspace, 1:3);
-completed_kspace = MRIRecon.apply_grappa_kernel!(masked_kspace, g, neighbours, kernelsize, unsampled);
+
+@time completed_kspace = MRIRecon.apply_grappa_kernel!(masked_kspace, g, neighbours, kernelsize, unsampled);
+
 imshow(log.(1 .+ abs.(completed_kspace)))
 
-recon_grappa = ifft(completed_kspace, 1:3)
-recon_full = ifft(actual_kspace, 1:3)
-imshow(abs.(recon_grappa - recon_full))
+recon_grappa = ifft(completed_kspace, 1:3);
+recon_full = ifft(actual_kspace, 1:3);
+
+imshow(abs.(recon_grappa .- recon_full))
+
+imshow(abs.(recon_grappa .- recon_full) ./ (abs.(recon_grappa) .+ abs.(recon_full)))
 
 imshow(abs.(ifft(ifftshift(completed_kspace, 1:3), 1:3)))
 

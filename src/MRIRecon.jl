@@ -8,6 +8,7 @@ module MRIRecon
 	using MRIHankel
 	using Base.Cartesian
 	using LoopVectorization
+	using CircularArrays
 	import DSP
 
 	include("fourier.jl")

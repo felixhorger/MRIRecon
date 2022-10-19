@@ -1,16 +1,15 @@
 
 function grappa_kernel(calibration::AbstractArray{T, N}, neighbours::NTuple{M, CartesianIndex{D}}, kernelsize::NTuple{D, Integer}) where {T<:Number, N, M, D}
 	# TODO check kernelsize
+	shape = size(calibration)[1:D]
 	num_channels = size(calibration, N)
 	# Get Hankel
 	hankel = MRIHankel.hankel_matrix(calibration, neighbours, kernelsize)
 	hankel = reshape(hankel, size(hankel, 1), num_channels * M)
 	# Get subregion of calibration used to compute kernel
-	shape = size(calibration)[1:D]
 	offset = kernelsize .÷ 2 .+ 1
-	reduced_shape = shape .- kernelsize
-	indices = ntuple(d -> offset[d]:shape[d]-offset[d]-mod(kernelsize[d], 2)+1, Val(D))
-	calibration = reshape(calibration[indices..., :], prod(reduced_shape), num_channels)
+	indices = ntuple(d -> offset[d]:shape[d]-kernelsize[d]+offset[d]-1, Val(D))
+	calibration = reshape(calibration[indices..., :], prod(length.(indices)), num_channels)
 	g = pinv(hankel) * calibration
 	return g
 end
@@ -35,23 +34,27 @@ function apply_grappa_kernel!(
 	num_channels = shape[N]
 	spatial_shape = shape[1:D]
 	num_neighbours_and_channels = M * num_channels
+	@assert size(g) == (num_neighbours_and_channels, num_channels)
+
+	# Make kspace a circular array
+	circular_kspace = CircularArray(kspace)
 
 	offset = CartesianIndex((kernelsize .÷ 2 .+ 1)...)
-	i = 1 # counter for neighbours and num_channels
-	for L in neighbours
-		for K in indices
-			for r = 1:shape[1] # Readout
-				λ = CartesianIndex(r, Tuple(K)...)
-				κ = L + λ - offset
-				k = Tuple(κ)
-				if !checkbounds(Bool, kspace, k..., :)
-					k = mod1.(k, spatial_shape)
+	for c_out = 1:num_channels
+		for c_in = 1:num_channels
+			i = 1 # counter for neighbours and num_channels
+			for L in neighbours
+				@inbounds γ = g[i+c_in-1, c_out]
+				for K in indices
+					@simd for r = 1:shape[1] # Readout
+						λ = CartesianIndex(r, Tuple(K)...)
+						κ = L + λ - offset
+						@inbounds kspace[λ, c_out] += γ * circular_kspace[κ, c_in]
+					end
 				end
-				κ = CartesianIndex(k)
-				@views kspace[λ, :] .+= transpose(transpose(kspace[κ, :]) * g[i:i+num_channels-1, :])
+				i += num_channels # Next neighbour
 			end
 		end
-		i += num_channels # Next neighbour
 	end
 	return kspace
 end

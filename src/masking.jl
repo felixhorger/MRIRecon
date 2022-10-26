@@ -16,6 +16,14 @@ function sampling_mask(
 end
 
 
+import Base: sort
+function sort(indices::AbstractVector{<: CartesianIndex{N}}, shape::NTuple{N, Integer}) where N
+	linear_indices = LinearIndices(shape)
+	sorted_indices = sort(indices; by=(k::CartesianIndex{N} -> linear_indices[k]))
+	return sorted_indices
+end
+
+
 
 """
 	Given indices which are sampled, find the ones which are not sampled.

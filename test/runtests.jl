@@ -38,7 +38,7 @@ end
 @assert i == length(sampling_indices) + 1
 MRIRecon.is_unique_sampling(sampling_indices, 1)
 
-fftshifted_indices = MRIRecon.fftshift(sampling_indices, shape[2:3])
+fftshifted_indices = MRIRecon.ifftshift(sampling_indices, shape[2:3])
 unsampled = MRIRecon.unsampled_indices(sampling_indices, shape[2:3])
 unsampled_shifted = fftshift(unsampled, shape[2:3])
 U = MRIRecon.plan_masking(fftshifted_indices, (shape..., num_channels, 1))

@@ -1,58 +1,74 @@
 
-function grappa_kernel(calibration::AbstractArray{T, N}, neighbours::NTuple{M, CartesianIndex{D}}, kernelsize::NTuple{D, Integer}) where {T<:Number, N, M, D}
+function grappa_neighbours(kernelsize::NTuple{N, Integer}, acceleration::NTuple{N, Integer}) where N
+	reduced_size = kernelsize .÷ acceleration .+ mod.(kernelsize, acceleration)
+	indices = Vector{CartesianIndex{N}}(undef, prod(reduced_size))
+	for (i, I) in enumerate(CartesianIndices(reduced_size))
+		indices[i] = CartesianIndex((Tuple(I) .- 1) .* acceleration .+ 1)
+	end
+	return indices
+end
+
+function grappa_kernel(calibration::AbstractArray{T, N}, neighbours::AbstractVector{<: CartesianIndex{D}}, kernelsize::NTuple{D, Integer}) where {T<:Number, N, D}
 	# TODO check kernelsize
-	shape = size(calibration)[1:D]
-	num_channels = size(calibration, N)
+	num_channels = size(calibration, 1)
+	shape = size(calibration)[2:N]
 	# Get Hankel
 	hankel = MRIHankel.hankel_matrix(calibration, neighbours, kernelsize)
-	hankel = reshape(hankel, size(hankel, 1), num_channels * M)
 	# Get subregion of calibration used to compute kernel
 	offset = kernelsize .÷ 2 .+ 1
 	indices = ntuple(d -> offset[d]:shape[d]-kernelsize[d]+offset[d]-1, Val(D))
-	calibration = reshape(calibration[indices..., :], prod(length.(indices)), num_channels)
-	g = pinv(hankel) * calibration
+	calibration = reshape(calibration[:, indices...], num_channels, prod(length.(indices)))
+	g = calibration * pinv(hankel)
+	g = reshape(g, num_channels, num_channels, length(neighbours))
 	return g
 end
+
+
 
 """
 kspace needs to be zero at `indices`
 """
 function apply_grappa_kernel!(
-	kspace::AbstractArray{T, N},
-	g::AbstractMatrix{T},
-	neighbours::NTuple{M, CartesianIndex{D}},
+	kspace::AbstractArray{C, N},
+	g::AbstractArray{C, 3},
+	neighbours::AbstractVector{<: CartesianIndex{D}},
 	kernelsize::NTuple{D, Integer},
-	indices::AbstractVector{<: CartesianIndex{E}}
-) where {T <: Number, N, M, D, E}
+	indices::AbstractVector{<: CartesianIndex{M}}
+) where {C <: Complex, N, D, M}
 	@assert N > 1
 	@assert N == D + 1 # Channels
-	@assert N == E + 2 # Readout and channels
+	@assert N == M + 2 # Readout and channels
 	@assert MRIHankel.check_kernelsize(neighbours, kernelsize)
 
 	# Get dimensions
 	shape = size(kspace)
-	num_channels = shape[N]
-	spatial_shape = shape[1:D]
-	num_neighbours_and_channels = M * num_channels
-	@assert size(g) == (num_neighbours_and_channels, num_channels)
+	num_channels = shape[1]
+	spatial_shape = shape[2:N]
+	@assert size(g) == (num_channels, num_channels, length(neighbours))
 
-	# Make kspace a circular array
-	circular_kspace = CircularArray(kspace)
+	# Subtract offset
+	neighbours = [L - CartesianIndex(kernelsize .÷ 2 .+ 1) for L in neighbours]
 
-	offset = CartesianIndex((kernelsize .÷ 2 .+ 1)...)
-	for c_out = 1:num_channels
-		for c_in = 1:num_channels
-			i = 1 # counter for neighbours and num_channels
-			for L in neighbours
-				@inbounds γ = g[i+c_in-1, c_out]
-				for K in indices
-					@simd for r = 1:shape[1] # Readout
-						λ = CartesianIndex(r, Tuple(K)...)
-						κ = L + λ - offset
-						@inbounds kspace[λ, c_out] += γ * circular_kspace[κ, c_in]
-					end
+	kspace_d = reinterpret(reshape, Float64, kspace)
+	g_d = reinterpret(reshape, Float64, g)
+
+	num_readout = shape[2]
+	Threads.@threads for l in eachindex(neighbours)
+		@inbounds L = neighbours[l]
+		for K_phase in indices
+			for k = 1:num_readout
+				K = CartesianIndex(k, Tuple(K_phase)...)
+				J = CartesianIndex(mod1.(Tuple(L + K), spatial_shape))
+				@turbo for c_in = 1:num_channels, c_out = 1:num_channels
+					kspace_d[1, c_out, K] += (
+							g_d[1, c_out, c_in, l] * kspace_d[1, c_in, J]
+						-	g_d[2, c_out, c_in, l] * kspace_d[2, c_in, J]
+					)
+					kspace_d[2, c_out, K] += (
+							g_d[1, c_out, c_in, l] * kspace_d[2, c_in, J]
+						+	g_d[2, c_out, c_in, l] * kspace_d[1, c_in, J]
+					)
 				end
-				i += num_channels # Next neighbour
 			end
 		end
 	end

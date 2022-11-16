@@ -58,6 +58,32 @@ end
 	end
 end
 
+"""
+	For dynamic
+"""
+function unsampled_indices(
+	indices::AbstractVector{<: CartesianIndex{N}},
+	shape::NTuple{N, Integer},
+	num_dynamic::Integer
+) where N
+
+	# Split into dynamic frames
+	split_indices = split_sampling(indices, num_dynamic)
+
+	# Sort within each dynamic frame and find unsampled indices
+	indices_to_mask = Vector{Vector{CartesianIndex{N}}}(undef, num_dynamic)
+	let
+		linear_indices = LinearIndices(shape)
+		by = (t::CartesianIndex{N} -> linear_indices[t])
+		@views for j = 1:num_dynamic
+			sort!(split_indices[j]; by)
+			indices_to_mask[j] = unsampled_indices(split_indices[j], shape)
+		end
+	end
+	return indices_to_mask
+end
+
+
 
 """
 	One vector for each dynamic
@@ -114,40 +140,27 @@ end
 end
 
 
+
 """
 	Linear operator to perform masking efficiently (in place, sparse mask)
 	
 	indices outside shape are ignored!
+	shape = (readout, phase encode ..., num_dynamic)
 """
 function plan_masking(
 	indices::AbstractVector{<: CartesianIndex{N}},
-	target_shape::NTuple{M, Integer}
+	shape::NTuple{M, Integer}
 ) where {N, M}
 	@assert N == M - 3 # Readout, channels, dynamic
 
-	# Get dimensions
-	shape = target_shape[2:N+1]
-	num_dynamic = target_shape[M]
-
-	# Split into dynamic frames
-	split_indices = split_sampling(indices, num_dynamic)
-
-	# Sort within each dynamic frame and find unsampled indices
-	indices_to_mask = Vector{Vector{CartesianIndex{N}}}(undef, num_dynamic)
-	let
-		linear_indices = LinearIndices(shape)
-		by = (t::CartesianIndex{N} -> linear_indices[t])
-		@views for j = 1:num_dynamic
-			sort!(split_indices[j]; by)
-			indices_to_mask[j] = unsampled_indices(split_indices[j], shape)
-		end
-	end
+	# Get unsampled indices
+	indices_to_mask = unsampled_indices(indices, shape[2:N+1], shape[M])
 
 	# Construct linear operator
 	U = HermitianOperator(
-		prod(target_shape),
+		prod(shape),
 		x -> begin
-			x_in_shape = reshape(x, target_shape)
+			x_in_shape = reshape(x, shape)
 			apply_sparse_mask!(x_in_shape, indices_to_mask)
 			x
 		end

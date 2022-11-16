@@ -53,9 +53,9 @@ function apply_grappa_kernel!(
 	g_d = reinterpret(reshape, Float64, g)
 
 	num_readout = shape[2]
-	Threads.@threads for l in eachindex(neighbours)
-		@inbounds L = neighbours[l]
-		for K_phase in indices
+	Threads.@threads for K_phase in indices
+		for l in eachindex(neighbours)
+			@inbounds L = neighbours[l]
 			for k = 1:num_readout
 				K = CartesianIndex(k, Tuple(K_phase)...)
 				J = CartesianIndex(mod1.(Tuple(L + K), spatial_shape))

@@ -1,32 +1,87 @@
 
-function plan_fourier_transform(
-	shape::NTuple{N, Integer},
-	dims::Union{Integer, NTuple{M, Integer} where M, AbstractVector},
-	type::Type=ComplexF64;
+#= TODO: Don't like the concept of which arrays are written into and
+which are allocated when creating the operator.
+Need a more general scheme which might mean more work for the user, but
+then it's at least consistent.
+Think about
+1) Shape of arrays before/after the operator is applied
+2) use in cg (x which is reused)
+3) structure of matrix in cg, or other algorithm
+=#
+
+"""
+	Not side effect free
+	Best practice: x[spatial dimensions..., other dimensions...]
+	If the user decides to mix spatial and other dimensions, good luck!
+	Pay attention that they have to be applied in pairs! Otherwise scaling
+"""
+function plan_fourier_transform!(
+	FHy::Array{T, N},
+	dims::Union{Integer, NTuple{M, Integer} where M, AbstractVector{<: Integer}};
+	type::Type{T}=ComplexF64,
 	kwargs...
-) where N
-	# Best practice: x[spatial dimensions..., other dimensions...]
-	# If the user decides to mix spatial and other dimensions, good luck!
-	# Pay attention that they have to be applied in pairs! Otherwise scaling
-	if haskey(kwargs, :flags) && kwargs[:flags] in (FFTW.MEASURE, FFTW.PATIENT)
-		arr = Array{ComplexF64, N}(undef, shape)
-	else
-		arr = FFTW.FakeArray{ComplexF64, N}(shape, cumprod((1, shape[1:N-1]...)))
-	end
-	FFT = plan_fft(arr, dims; kwargs...)
-	FFTH = inv(FFT)
-	restore_shape(x) = reshape(x, shape) # Note that x is Vector
+) where {N, T}
+
+	# TODO: write Fx also in Fhy and rename it to sth more generic, this is for the case when x shall not be mutated
+
+	# Arrays for in-place operations
+	Fx = similar(FHy)
+	vec_Fx = vec(Fx)
+	vec_FHy = vec(FHy)
+
+	# Plan FFTs
+	FFT = plan_fft(Fx, dims; kwargs...)
+	FFTH = plan_ifft(FHy, dims; kwargs...)
+
+	# Reshaping
+	shape = size(FHy)
+	restore_shape(z) = reshape(z, shape) # Note that z is vector
+
+	# Define linear operator
 	F = UnitaryOperator(
 		prod(shape),
 		x -> begin
 			x = restore_shape(x)
-			y = FFT * x
-			vec(y)
+			mul!(Fx, FFT, x)
+			vec_Fx
 		end,
 		y -> begin
 			y = restore_shape(y)
-			x = FFTH * y
-			vec(x)
+			mul!(FHy, FFTH, y)
+			vec_FHy
+		end
+	)
+	return F
+end
+function plan_fourier_transform!(
+	shape::NTuple{N, Integer},
+	dims::Union{Integer, NTuple{M, Integer} where M, AbstractVector{<: Integer}};
+	type::Type{T}=ComplexF64,
+	kwargs...
+) where {N, T}
+
+	# Plan FFTs
+	if haskey(kwargs, :flags) && kwargs[:flags] in (FFTW.MEASURE, FFTW.PATIENT)
+		z = Array{T, N}(undef, shape)
+	else
+		z = FFTW.FakeArray{T, N}(shape, cumprod((1, shape[1:N-1]...)))
+	end
+	FFT = plan_fft!(z, dims; kwargs...)
+	FFTH = plan_ifft!(z, dims; kwargs...)
+
+	# Reshaping and views
+	restore_shape(z) = reshape(z, shape) # Note that z is a vector here
+
+	# Define linear operator
+	F = UnitaryOperator(
+		prod(shape),
+		x -> begin
+			FFT * restore_shape(x) # In place
+			x
+		end,
+		y -> begin
+			FFTH * restore_shape(y) # In place
+			y
 		end
 	)
 	return F
@@ -249,7 +304,6 @@ function shift_fov!(
 	# Precompute phase modulation
 	exponentials = exp.(-im .* shift)
 	shape = size(kspace)[1:D]
-	residual_shape = size(kspace)[D+1:end]
 	phase_modulation = Array{ComplexF64, D}(undef, shape)
 	offset = .- shape .÷ 2
 	scale = 2π ./ shape
@@ -355,6 +409,27 @@ for (func, op) in ( (:fftshift, :(.+)), (:ifftshift, :(.-)) )
 			end
 			return indices
 		end
+
+		function $func(
+			indices::AbstractVector{<: CartesianIndex{N}},
+			shape::NTuple{N, Integer},
+			dims
+		) where {N,M}
+			indices = copy(indices)
+			shift = shape .÷ 2
+			tmp = Vector{Int64}(undef, N)
+			for i in eachindex(indices)
+				tmp .= Tuple(indices[i])
+				for d in dims
+					tmp[d] = mod1(
+						$(Expr(:call, op, :(tmp[d]), :(shift[d]))), # index ± shift
+						shape[d]
+					)
+				end
+				indices[i] = CartesianIndex(tmp...)
+			end
+			return indices
+		end
 	end
 end
 
@@ -397,5 +472,47 @@ function circular_conv(u::AbstractArray{<: Number}, v::AbstractArray{<: Number})
 	F = plan_fft(u)
 	FH = inv(F)
 	FH * ((F * u) .* (F * v))
+end
+
+
+"""
+kspace[readout, channels, spatial dims...]
+Readout must be disentangled and calibration must be fully sampled
+"""
+function partial_fourier(kspace::AbstractArray{<: C, N}, num_calibration::Integer, unsampled::AbstractVector{<: CartesianIndex{M}}) where {N, M, C <: Complex}
+	@assert N == M + 2 # Readout, channels
+	# Get dimensions
+	shape = size(kspace)[3:N]
+	num_partial = shape .- num_calibration
+	calibration_indices = centre_indices.(shape, num_calibration)
+	# Plan fft
+	FH = plan_bfft!(kspace, 3:N) # don't care for normalisation
+	F = inv(FH)
+	# Get k-space centre
+	calibration = zeros(C, size(kspace))
+	calibration[:, :, calibration_indices...] .= kspace[:, :, calibration_indices...]
+	# Get phase map
+	phase_factor = ifftshift(calibration, 3:N) # misnomer phase_factor
+	FH * phase_factor # in-place
+	phase_factor = phasefactor.(phase_factor)
+	# Invert k-space
+	imagespace = ifftshift(kspace, 3:N) # misnomer imagespace
+	FH * imagespace # in-place
+	# Remove phase
+	imagespace ./= phase_factor
+	# Transform back
+	F * imagespace # in-place
+	symmetric_kspace = fftshift(imagespace) # misnomer imagespace
+	# Mirror part of k-space
+	# Get the negative k: "-I" ≡ -(I - centre) + centre = 2centre - I
+	offset = CartesianIndex(2 .* (shape .÷ 2))
+	for I in unsampled
+		@views symmetric_kspace[:, :, I] = conj.(symmetric_kspace[:, :, offset - I])
+	end
+	# Add phase back in
+	imagespace = ifftshift(symmetric_kspace, 3:N) # misnomer imagespace
+	FH * imagespace # in-place
+	imagespace .*= phase_factor
+	return imagespace
 end
 

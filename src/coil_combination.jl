@@ -24,10 +24,11 @@ no cut-off performed!
 User needs to choose subset of columns of C
 """
 function channel_compression_matrix(D::AbstractMatrix{<: Complex})
-	channels = size(kspace, 1)
+	channels = size(D, 1)
 	C = Matrix{ComplexF64}(undef, channels, channels)
 	σ = Vector{Float64}(undef, channels)
-	return channel_compression_matrix!(C, σ, D)
+	channel_compression_matrix!(C, σ, D)
+	return C, σ
 end
 function channel_compression_matrix!(
 	C::AbstractMatrix{<: Complex},
@@ -40,22 +41,25 @@ function channel_compression_matrix!(
 	map!((λ -> λ < 0 ? 0 : sqrt(λ)), σ, F.values)
 	# Note: if the singular values of D are small, then some of the eigenvalues (small absolute value)
 	# of D * D' turn out negative, need to mask those
-	return
+	return C, σ
 end
 
 
 """
 	σ needs to be sorted largest to lowest
 	ε is the relative threshold w.r.t. the maximum eigenvalue
-	q is which quantile must be above
+	q is which quantile the number of it must be above
+
+	One function for one fully sampled and disentangled dimension (3-dim C)
+	Another for full 3D compression (2-dim C)
 """
-@views function cut_virtual_channels(C::AbstractArray{<: Complex, 3}, σ::AbstractMatrix{<: Real}, ε::Real, q::Real)
+function cut_virtual_channels(C::AbstractArray{<: Complex, 3}, σ::AbstractMatrix{<: Real}, ε::Real, q::Real)
 	@assert 0 < ε < 1
-	thresholds = ε .* σ[1, :]
+	@views thresholds = ε .* σ[1, :]
 	num = size(σ, 2)
 	required_num_smaller = Int(ceil(q * num))
-	n = 0
-	for i = 1:size(σ, 1)
+	i = 1
+	while i ≤ size(σ, 1)
 		num_smaller = 0
 		for j = 1:num
 			if σ[i, j] < thresholds[j]
@@ -65,12 +69,25 @@ end
 				end
 			end
 		end
-		n += 1
+		i += 1
 	end
 	@label finish
-	n == size(σ, 1) && error("No compression possible")
-	C_cut = Array{ComplexF64, 3}(undef, n, size(C, 2), num)
-	C_cut .= C[1:n, :, :]
+	i == 1+size(σ, 1) && error("No compression possible")
+	C_cut = C[1:i-1, :, :]
+	return C_cut
+end
+function cut_virtual_channels(C::AbstractMatrix{<: Complex}, σ::AbstractVector{<: Real}, ε::Real)
+	@assert 0 < ε < 1
+	threshold = ε .* first(σ)
+	i = 1
+	while i ≤ length(σ)
+		if σ[i] < threshold
+			break
+		end
+		i += 1
+	end
+	i == 1+length(σ) && error("No compression possible")
+	C_cut = C[1:i-1, :]
 	return C_cut
 end
 
@@ -111,6 +128,7 @@ end
 
 """
 	Applied the accumulated rotation matrices R to U in order to align them
+	TODO: useful?
 """
 function align_channels(C::AbstractArray{<: Complex, 3}, R::AbstractArray{<: Complex, 3})
 	virtual_channels, channels, num = size(C)
@@ -191,6 +209,18 @@ function apply_channel_compression(
 			@inbounds compressed_kspace[m, n, v] += C[c, v, n] * kspace[m, n, c]
 		end
 	end
+	return compressed_kspace
+end
+
+function apply_channel_compression(
+	kspace::AbstractMatrix{T},
+	C::AbstractMatrix{<: Complex}
+) where T <: Complex
+	num_channels, num_spatial = size(kspace)
+	num_virtual_channels = size(C, 1)
+	@assert size(C, 2) == num_channels
+	compressed_kspace = zeros(T, num_virtual_channels, num_spatial)
+	mul!(compressed_kspace, C, kspace)
 	return compressed_kspace
 end
 

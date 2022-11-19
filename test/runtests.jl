@@ -12,6 +12,22 @@ import MRIPhantoms
 import MRIRecon
 
 
+# Partial Fourier
+shape = (1, 95, 128)
+num_channels = 2
+upsampling = (2, 2)
+phantom, _ = MRIPhantoms.homogeneous(shape[2:3], upsampling)
+phantom .*= reshape(exp.(im * 2π * (0:1/(shape[3]-1):1)), 1, shape[3])
+phantom = reshape(phantom, 1, 1, shape[2], shape[3])
+kspace = fftshift(fft(phantom, 3:4), 3:4)
+num_calibration = 32
+kspace[:, :, :, shape[3]÷2+num_calibration:end] .= 0
+unsampled = vec(CartesianIndices(shape[2:3])[:, shape[3]÷2+num_calibration:end])
+recon = MRIRecon.partial_fourier(kspace, num_calibration, unsampled);
+imshow(permutedims(clamp!(abs.(recon .- phantom), 0, 1), (3, 4, 1, 2)))
+
+
+
 # Dimensions
 num_channels = 8
 phase_encoding_shape = (128, 128)

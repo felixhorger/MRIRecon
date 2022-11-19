@@ -1,14 +1,4 @@
 
-#= TODO: Don't like the concept of which arrays are written into and
-which are allocated when creating the operator.
-Need a more general scheme which might mean more work for the user, but
-then it's at least consistent.
-Think about
-1) Shape of arrays before/after the operator is applied
-2) use in cg (x which is reused)
-3) structure of matrix in cg, or other algorithm
-=#
-
 """
 	Not side effect free
 	Best practice: x[spatial dimensions..., other dimensions...]
@@ -393,6 +383,7 @@ end
 import FFTW: fftshift, ifftshift
 for (func, op) in ( (:fftshift, :(.+)), (:ifftshift, :(.-)) )
 	@eval begin
+
 		function $func(
 			indices::AbstractVector{<: CartesianIndex{N}},
 			shape::NTuple{N, Integer}
@@ -478,12 +469,12 @@ end
 """
 kspace[readout, channels, spatial dims...]
 Readout must be disentangled and calibration must be fully sampled
+TODO: Cannot do partial fourier along readout for echo time reduction
 """
 function partial_fourier(kspace::AbstractArray{<: C, N}, num_calibration::Integer, unsampled::AbstractVector{<: CartesianIndex{M}}) where {N, M, C <: Complex}
 	@assert N == M + 2 # Readout, channels
 	# Get dimensions
 	shape = size(kspace)[3:N]
-	num_partial = shape .- num_calibration
 	calibration_indices = centre_indices.(shape, num_calibration)
 	# Plan fft
 	FH = plan_bfft!(kspace, 3:N) # don't care for normalisation
@@ -496,23 +487,30 @@ function partial_fourier(kspace::AbstractArray{<: C, N}, num_calibration::Intege
 	FH * phase_factor # in-place
 	phase_factor = phasefactor.(phase_factor)
 	# Invert k-space
-	imagespace = ifftshift(kspace, 3:N) # misnomer imagespace
-	FH * imagespace # in-place
+	kspace = ifftshift(kspace, 3:N) # misnomer imagespace
+	imagespace = FH * kspace # in-place
 	# Remove phase
 	imagespace ./= phase_factor
 	# Transform back
-	F * imagespace # in-place
-	symmetric_kspace = fftshift(imagespace) # misnomer imagespace
+	symmetric_kspace = F * imagespace # in-place
 	# Mirror part of k-space
-	# Get the negative k: "-I" ≡ -(I - centre) + centre = 2centre - I
-	offset = CartesianIndex(2 .* (shape .÷ 2))
+	# Get the negative k:
+	#=
+	K	->  I - centre
+	-K	->  centre - I
+	-I	->  -K + centre = centre - I + centre = 2centre - I
+	=#
+	offset = CartesianIndex(2 .* (shape .÷ 2 .+ 1))
+	shift = shape .÷ 2
+	fftshift(I) = CartesianIndex(mod1.(Tuple(I) .- shift, shape))
 	for I in unsampled
-		@views symmetric_kspace[:, :, I] = conj.(symmetric_kspace[:, :, offset - I])
+		J = offset - I
+		(I, J) = fftshift.((I, J))
+		@views symmetric_kspace[:, :, I] = conj.(symmetric_kspace[:, :, J])
 	end
 	# Add phase back in
-	imagespace = ifftshift(symmetric_kspace, 3:N) # misnomer imagespace
-	FH * imagespace # in-place
-	imagespace .*= phase_factor
+	imagespace = FH * symmetric_kspace # in-place
+	imagespace .*= phase_factor ./ prod(shape)
 	return imagespace
 end
 

@@ -224,7 +224,7 @@ end
 # TODO: Maybe rewrite this to use CartesianIndices
 function centre_indices(shape::Integer, centre_size::Integer)
 	centre = shape ÷ 2
-	half = centre_size ÷ 2
+	half = centre_size ÷ 2 # Actually the centre is at this plus one
 	lower = centre - half + 1
 	upper = centre + half + mod(centre_size, 2)
 	return lower:upper

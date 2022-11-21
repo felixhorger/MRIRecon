@@ -13,18 +13,18 @@ import MRIRecon
 
 
 # Partial Fourier
-shape = (1, 95, 128)
-num_channels = 2
+shape = (95, 128)
 upsampling = (2, 2)
-phantom, _ = MRIPhantoms.homogeneous(shape[2:3], upsampling)
-phantom .*= reshape(exp.(im * 2π * (0:1/(shape[3]-1):1)), 1, shape[3])
-phantom = reshape(phantom, 1, 1, shape[2], shape[3])
-kspace = fftshift(fft(phantom, 3:4), 3:4)
+phantom, _ = MRIPhantoms.homogeneous(shape, upsampling)
+phantom .*= reshape(exp.(im * 2π * (0:1/(shape[2]-1):1)), 1, shape[2])
+kspace = fftshift(fft(phantom))
 num_calibration = 32
-kspace[:, :, :, shape[3]÷2+num_calibration:end] .= 0
-unsampled = vec(CartesianIndices(shape[2:3])[:, shape[3]÷2+num_calibration:end])
+kspace[:, shape[2]÷2+num_calibration:end] .= 0
+unsampled = vec(CartesianIndices(shape[2:2])[shape[2]÷2+num_calibration:end])
+
+kspace = ifft(ifftshift(kspace, 1), 1)
 recon = MRIRecon.partial_fourier(kspace, num_calibration, unsampled);
-imshow(permutedims(clamp!(abs.(recon .- phantom), 0, 1), (3, 4, 1, 2)))
+imshow(clamp!(abs.(recon .- phantom), 0, 1))
 
 
 

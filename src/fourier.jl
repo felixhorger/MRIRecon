@@ -467,27 +467,25 @@ end
 
 
 """
-kspace[readout, channels, spatial dims...]
-Readout must be disentangled and calibration must be fully sampled
-TODO: Cannot do partial fourier along readout for echo time reduction
+kspace[fully sampled and disentangled dims or other (e.g. channels), partially sampled spatial dims...]
 """
 function partial_fourier(kspace::AbstractArray{<: C, N}, num_calibration::Integer, unsampled::AbstractVector{<: CartesianIndex{M}}) where {N, M, C <: Complex}
-	@assert N == M + 2 # Readout, channels
+	@assert N == M + 1
 	# Get dimensions
-	shape = size(kspace)[3:N]
+	shape = size(kspace)[2:N]
 	calibration_indices = centre_indices.(shape, num_calibration)
 	# Plan fft
-	FH = plan_bfft!(kspace, 3:N) # don't care for normalisation
+	FH = plan_bfft!(kspace, 2:N) # don't care for normalisation
 	F = inv(FH)
 	# Get k-space centre
 	calibration = zeros(C, size(kspace))
-	calibration[:, :, calibration_indices...] .= kspace[:, :, calibration_indices...]
+	calibration[:, calibration_indices...] .= kspace[:, calibration_indices...]
 	# Get phase map
-	phase_factor = ifftshift(calibration, 3:N) # misnomer phase_factor
+	phase_factor = ifftshift(calibration, 2:N) # misnomer phase_factor
 	FH * phase_factor # in-place
 	phase_factor = phasefactor.(phase_factor)
 	# Invert k-space
-	kspace = ifftshift(kspace, 3:N) # misnomer imagespace
+	kspace = ifftshift(kspace, 2:N) # misnomer imagespace
 	imagespace = FH * kspace # in-place
 	# Remove phase
 	imagespace ./= phase_factor
@@ -506,7 +504,7 @@ function partial_fourier(kspace::AbstractArray{<: C, N}, num_calibration::Intege
 	for I in unsampled
 		J = offset - I
 		(I, J) = fftshift.((I, J))
-		@views symmetric_kspace[:, :, I] = conj.(symmetric_kspace[:, :, J])
+		@views symmetric_kspace[:, I] = conj.(symmetric_kspace[:, J])
 	end
 	# Add phase back in
 	imagespace = FH * symmetric_kspace # in-place

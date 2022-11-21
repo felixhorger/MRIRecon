@@ -59,7 +59,7 @@ unsampled = MRIRecon.unsampled_indices(sampling_indices, shape[2:3])
 unsampled_shifted = fftshift(unsampled, shape[2:3])
 U = MRIRecon.plan_masking(fftshifted_indices, (shape..., num_channels, 1))
 U_unsampled = MRIRecon.plan_masking(unsampled, (shape..., num_channels, 1))
-F = MRIRecon.plan_fourier_transform((shape..., num_channels, 1), 1:3)
+F = MRIRecon.plan_fourier_transform!((shape..., num_channels, 1), 1:3)
 A = MRIRecon.plan_psf(U, F, S)
 GC.gc(true)
 
@@ -67,11 +67,14 @@ GC.gc(true)
 upsampling = (2, 2, 2)
 phantom, _ = MRIPhantoms.homogeneous(shape, upsampling)
 kspace = fft(sensitivities .* phantom, 1:3)
-kspace_orig = copy(kspace)
-backprojection = S' * F' * U * vec(kspace)
+masked_kspace = copy(kspace)
+U * vec(masked_kspace) # in place
+masked_kspace = permutedims(ifftshift(masked_kspace, 1:3), (4, 1, 2, 3));
+backprojection = S' * F' * U * vec(copy(kspace)) # in place
 phantom_backprojection = A * vec(phantom)
 
 kernelsize = (7, 7, 3)
+targets = (CartesianIndex(4, 4, 2),)
 neighbours = (
 	CartesianIndex(1, 1, 1), CartesianIndex(1, 3, 1), CartesianIndex(1, 5, 1), CartesianIndex(1, 7, 1),
 	CartesianIndex(2, 1, 1), CartesianIndex(2, 3, 1), CartesianIndex(2, 5, 1), CartesianIndex(2, 7, 1),
@@ -93,15 +96,19 @@ neighbours = (
 	CartesianIndex(4, 1, 3), CartesianIndex(4, 3, 3), CartesianIndex(4, 5, 3), CartesianIndex(4, 7, 3),
 	CartesianIndex(5, 1, 3), CartesianIndex(5, 3, 3), CartesianIndex(5, 5, 3), CartesianIndex(5, 7, 3),
 	CartesianIndex(6, 1, 3), CartesianIndex(6, 3, 3), CartesianIndex(6, 5, 3), CartesianIndex(6, 7, 3),
-	CartesianIndex(7, 1, 3), CartesianIndex(7, 3, 3), CartesianIndex(7, 5, 3), CartesianIndex(7, 7, 3),
+	CartesianIndex(7, 1, 3), CartesianIndex(7, 3, 3), CartesianIndex(7, 5, 3), CartesianIndex(7, 7, 3)
 )
 
+
 actual_kspace = ifftshift(kspace_orig, 1:3);
-g = MRIRecon.grappa_kernel(actual_kspace[calibration_indices..., :], neighbours, kernelsize);
-masked_kspace = ifftshift(kspace, 1:3);
+g = MRIRecon.grappa_kernel(permutedims(actual_kspace, (4, 1, 2, 3))[:, calibration_indices...], targets, neighbours, kernelsize);
 
-@time completed_kspace = MRIRecon.apply_grappa_kernel!(masked_kspace, g, neighbours, kernelsize, unsampled);
+centre = CartesianIndex(kernelsize[2:3] .÷ 2)
+indices = [I - centre for I in unsampled]
 
+@time completed_kspace = MRIRecon.apply_grappa_kernel!(masked_kspace, g, targets, neighbours, kernelsize, indices);
+
+completed_kspace = permutedims(completed_kspace, (2, 3, 4, 1))
 imshow(log.(1 .+ abs.(completed_kspace)))
 
 recon_grappa = ifft(completed_kspace, 1:3);

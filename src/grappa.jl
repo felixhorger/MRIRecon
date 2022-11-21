@@ -66,19 +66,6 @@ function apply_grappa_kernel!(
 	targets, neighbours = one_shift.((targets, neighbours))
 	num_readout = shape[2]
 
-	# Check inbounds
-	Threads.@threads for K_phase in indices
-		for t in eachindex(targets)
-			@inbounds T = targets[t]
-			for k = 1:num_readout
-				K = T + CartesianIndex(k, Tuple(K_phase)...)
-				if all(spatial_shape .< Tuple(K) .< ntuple(_ -> 1, D))
-					error("Index $K_phase violates array bounds if target indices are added.")
-				end
-			end
-		end
-	end
-
 	wrap_index(I) = CartesianIndex(mod1.(Tuple(I), spatial_shape))
 	Threads.@threads for K_phase in indices
 		for l in eachindex(neighbours)

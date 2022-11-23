@@ -11,6 +11,7 @@ function espirit_hankel_factorisation(
 	kernelsize::NTuple{M, Integer},
 	σ_cut::Real
 ) where {N, M}
+	error("hankel updated")
 	@assert N == M + 1 # Channels
 
 	#  Get hankel matrix
@@ -270,9 +271,9 @@ function espirit_eigenmaps(
 end
 
 
-function phasefactor(a::Number)
+function phasefactor(a::T) where T <: Number
 	absolute = abs(a)
-	return absolute == 0 ? 1 : a / absolute
+	return absolute == zero(T) ? one(T) : a / absolute
 end
 
 function complex_sign(a::Complex)

@@ -190,7 +190,7 @@ function plan_toeplitz_embedding(
 		finufft_kwargs...
 	)
 	# Plan convolution operator
-	C, y_padded = plan_circular_convolution((upsampled_shape..., shape[3]), q, 1:2; flags=fftw_flags)
+	C, y_padded = plan_periodic_convolution((upsampled_shape..., shape[3]), q, 1:2; flags=fftw_flags)
 
 	# Allocate memory
 	x_padded = Array{Complex{T}, 3}(undef, upsampled_shape..., shape[3])
@@ -428,7 +428,7 @@ end
 """
 	Not side effect free
 """
-function plan_circular_convolution(shape::NTuple{N, Integer}, c::AbstractArray{<: Number, M}, dims::Union{Integer, NTuple{D, Integer}, AbstractVector}; kwargs...) where {N, M, D}
+function plan_periodic_convolution(shape::NTuple{N, Integer}, c::AbstractArray{<: Number, M}, dims::Union{Integer, NTuple{D, Integer}, AbstractVector}; kwargs...) where {N, M, D}
 	# Array for in-place operations
 	Fx = Array{ComplexF64, N}(undef, shape)
 	vec_xc = vec(Fx)
@@ -458,7 +458,7 @@ end
 	Circular convolution
 	This should be available in DSP.jl
 """
-function circular_conv(u::AbstractArray{<: Number}, v::AbstractArray{<: Number})
+function periodic_conv(u::AbstractArray{<: Number}, v::AbstractArray{<: Number})
 	# TODO: Pad to same size
 	F = plan_fft(u)
 	FH = inv(F)

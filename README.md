@@ -10,7 +10,7 @@ If you use my package, please leave a star! Your appreciation is my motivation.
 If my code helps you with your research, please cite it as follows:
 ```
 	@misc{Horger2021,
-		title = {Julia Package for MR Image Reconstruction (MRIRecon.jl)},
+		title = {Julia package for MR Image Reconstruction (MRIRecon.jl)},
 		url = {https://github.com/felixhorger/MRIRecon.jl},
 		author = {Felix Horger},
 		year = {2021}

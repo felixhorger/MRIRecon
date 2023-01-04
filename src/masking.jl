@@ -145,19 +145,21 @@ end
 	Linear operator to perform masking efficiently (in place, sparse mask)
 	
 	indices outside shape are ignored!
-	shape = (readout, phase encode ..., num_dynamic)
+	shape = (readout, phase encode ..., channels, num_dynamic)
 """
 function plan_masking(
 	indices::AbstractVector{<: CartesianIndex{N}},
-	shape::NTuple{M, Integer}
+	shape::NTuple{M, Integer};
+	dtype::Type=ComplexF64 # Needed for type stability
 ) where {N, M}
-	@assert N == M - 3 # Readout, channels, dynamic
+	@assert N == M - 3 "indices must include only phase encoding, shape = (readout, phase encode..., channels, dynamic)"
+	# Readout, channels, dynamic
 
 	# Get unsampled indices
 	indices_to_mask = unsampled_indices(indices, shape[2:N+1], shape[M])
 
 	# Construct linear operator
-	U = HermitianOperator(
+	U = HermitianOperator{dtype}(
 		prod(shape),
 		x -> begin
 			x_in_shape = reshape(x, shape)
@@ -223,8 +225,8 @@ end
 
 # TODO: Maybe rewrite this to use CartesianIndices
 function centre_indices(shape::Integer, centre_size::Integer)
-	centre = shape ÷ 2
-	half = centre_size ÷ 2 # Actually the centre is at this plus one
+	centre = shape ÷ 2 # Actually the centre is at this plus one
+	half = centre_size ÷ 2
 	lower = centre - half + 1
 	upper = centre + half + mod(centre_size, 2)
 	return lower:upper

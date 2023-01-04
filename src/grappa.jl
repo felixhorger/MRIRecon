@@ -8,7 +8,7 @@ function grappa_neighbours(kernelsize::NTuple{N, Integer}, acceleration::NTuple{
 	return indices
 end
 
-function grappa_kernel(calibration::AbstractArray{T, N}, targets::NTuple{M, CartesianIndex{D}} where M, neighbours::NTuple{M, <: CartesianIndex{D}} where M, kernelsize::NTuple{D, Integer}) where {T<:Number, N, D}
+function grappa_kernel(calibration::AbstractArray{T, N}, targets::Tuple{Vararg{CartesianIndex{D}}}, neighbours::Tuple{Vararg{CartesianIndex{D}}}, kernelsize::NTuple{D, Integer}) where {T<:Number, N, D}
 	num_channels = size(calibration, 1)
 	shape = size(calibration)[2:N]
 	# Get Hankel
@@ -43,8 +43,8 @@ Wrap around is used, i.e. the kernel's "unit cell" must fit an integer number of
 function apply_grappa_kernel!(
 	kspace::AbstractArray{C, N},
 	g::AbstractArray{C, 4},
-	targets::NTuple{Q, CartesianIndex{D}} where Q,
-	neighbours::NTuple{Q, CartesianIndex{D}} where Q,
+	targets::Tuple{Vararg{CartesianIndex{D}}},
+	neighbours::Tuple{Vararg{CartesianIndex{D}}},
 	kernelsize::NTuple{D, Integer},
 	indices::AbstractVector{<: CartesianIndex{M}}
 ) where {C <: Complex, N, D, M}

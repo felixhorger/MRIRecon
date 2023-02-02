@@ -1,14 +1,17 @@
 
 module MRIRecon
 
+	using Base.Cartesian
+	import Base: empty
+	using LinearAlgebra
+	using CircularArrays
+	using LoopVectorization
+	using LoopVectorizationTools
+	import ThreadTools
 	using FFTW
 	using FINUFFT
-	using LinearAlgebra
 	using LinearOperators
 	using MRIHankel
-	using Base.Cartesian
-	using LoopVectorization
-	using CircularArrays
 	import DSP
 
 	include("fourier.jl")
@@ -17,6 +20,7 @@ module MRIRecon
 	include("sense.jl")
 	include("sensitivity_estimation.jl")
 	include("grappa.jl")
+	include("utils.jl")
 
 end
 

@@ -62,7 +62,7 @@ function apply_grappa_kernel!(
 	kspace_d = reinterpret(reshape, Float64, kspace)
 	g_d = reinterpret(reshape, Float64, g)
 
-	one_shift(I) = Tuple(i - one(CartesianIndex{D}) for i in I)
+	one_shift(I) = ntuple(i -> I[i] - one(CartesianIndex{D}), D)
 	targets, neighbours = one_shift.((targets, neighbours))
 	num_readout = shape[2]
 

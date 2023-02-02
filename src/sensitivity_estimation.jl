@@ -484,10 +484,10 @@ function direct_unnormalised_sensitivities(
 	return sensitivities, rsos
 end
 
+# TODO: Rename to rsos so that it's more clear
 function direct_normalise_sensitivities!(
 	sensitivities::AbstractArray{<: Number, N},
 	rsos::AbstractArray{<: Real, M},
-	outshape::NTuple{M, Integer},
 	cut::Real,
 	tol::Real
 ) where {N, M}
@@ -500,7 +500,7 @@ function direct_normalise_sensitivities!(
 	cut *= maxi
 	tol *= maxi
 	inv_tol = 1 / tol
-	for x in CartesianIndices(outshape)
+	for x in CartesianIndices(rsos)
 		normalisation = rsos[x]
 		attenuation = smooth_step((normalisation - cut + tol) * inv_tol)
 		if normalisation == 0
@@ -527,7 +527,7 @@ function estimate_sensitivities(
 ) where {N, M, T <: Number}
 
 	sensitivities, rsos = direct_unnormalised_sensitivities(calibration, outshape)
-	sensitivities = direct_normalise_sensitivities!(sensitivities, rsos, outshape, cut, tol)
+	sensitivities = direct_normalise_sensitivities!(sensitivities, rsos, cut, tol)
 	return sensitivities
 end
 

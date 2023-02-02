@@ -2,7 +2,7 @@
 # Sorry, the quality of commenting/documentation is low
 using Revise
 using ImageView
-#import PyPlot as plt
+import PyPlot as plt
 using Test
 using IterativeSolvers
 using Statistics
@@ -10,6 +10,7 @@ using FFTW
 import HDF5
 import MRIPhantoms
 import MRIRecon
+import MRITrajectories
 
 
 # Partial Fourier
@@ -403,4 +404,65 @@ let
 	end
 	@test isaligned
 end
+
+
+
+# Toeplitz embedding
+num_columns = 64
+num_lines = 64
+shape = (num_columns, num_lines)
+num_angles = MRITrajectories.required_num_spokes(num_lines)
+#
+spokes_per_timepoint = num_angles
+total_num_spokes = spokes_per_timepoint
+φ, spoke_indices = MRITrajectories.golden_angle_incremented(total_num_spokes, num_angles)
+num_channels = 10
+#
+k = MRITrajectories.radial_spokes(num_angles, num_columns)
+k = reshape(k, 2, num_columns * num_angles)
+#
+F = MRIRecon.plan_fourier_transform(k[1, :], k[2, :], (num_columns, num_lines, num_channels))
+M = MRIRecon.plan_masking!(CartesianIndex.(spoke_indices), (num_columns, num_angles, num_channels, 1))
+A = F' * M * F
+weights = zeros(ComplexF64, num_columns, num_angles)
+@views weights[:, spoke_indices] .= 1
+T = MRIRecon.plan_toeplitz_embedding(k[1, :], k[2, :], vec(weights), (num_columns, num_lines, num_channels))
+
+y = rand(ComplexF64, num_columns, num_lines, num_channels);
+vec_y = vec(y);
+
+z1 = reshape(T * vec_y, num_columns, num_lines, num_channels)
+z2 = reshape(A * vec_y, num_columns, num_lines, num_channels)
+
+@assert z1 ≈ z2
+
+
+# Basic fully sampled recon
+sensitivities = rand(ComplexF64, 64, 64, 4)
+x = rand(ComplexF64, 64, 64, 3)
+S = MRIRecon.plan_sensitivities(sensitivities, 3)
+y = reshape(x, 64, 64, 1, 3) .* reshape(sensitivities, 64, 64, 4, 1)
+@assert vec(y) ≈ (S * vec(x))
+z = sum(y .* reshape(conj.(sensitivities), 64, 64, 4, 1); dims=3)
+@assert vec(z) ≈ S' * vec(y)
+
+
+# Regular undersampling
+U_inplace = MRIRecon.plan_regular_undersampling!((32, 33, 2), 2, 4, 2)
+U = MRIRecon.plan_regular_undersampling((32, 33, 2), 2, 4, 2)
+a = rand(ComplexF64, 32, 33, 2)
+b = copy(a)
+a = reshape(U' * U * vec(a), 32, :, 2)
+U_inplace * vec(b)
+@assert b ≈ a
+
+fig, axs = plt.subplots(2, 2)
+axs[1, 1].set_title("a")
+axs[1, 1].imshow(abs.(a[:, :, 1]))
+axs[1, 2].set_title("b")
+axs[1, 2].imshow(abs.(b[:, :, 1]))
+axs[2, 1].set_title("a")
+axs[2, 1].imshow(abs.(a[:, :, 2]))
+axs[2, 2].set_title("b")
+axs[2, 2].imshow(abs.(b[:, :, 2]))
 

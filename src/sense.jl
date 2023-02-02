@@ -1,52 +1,73 @@
 
 """
+	Size of the operator returned by plan_sensitivities()
+
+	Convenience and reminder, helps keeping scripts clean of excess information.
+"""
+function sensitivites_size(shape::Tuple{Vararg{Integer}}, num_channels::Integer, num_other::Integer)
+	other_length = prod(shape) * num_other
+	return (other_length * num_channels, other_length)
+end
+
+"""
 	sensitivities[spatial dimensions..., channels]
 	not side effect free
 """
 function plan_sensitivities(
-	sensitivities::AbstractArray{<: Number, N},
-	num_dynamic::Integer
-) where N
+	sensitivities::AbstractArray{T, N},
+	num_other::Integer;
+	dtype::Type=T,
+	Sx::AbstractVector{<: T}=empty(Vector{T}),
+	SHy::AbstractVector{<: T}=empty(Vector{T})
+) where {T <: Number, N}
 	# Get dimensions
 	shape = size(sensitivities)
 	num_channels = shape[N]
 	num_spatial = prod(shape[1:N-1])
-	input_dim = num_spatial * num_dynamic
+	input_dim = num_spatial * num_other
 	output_dim = input_dim * num_channels
 
 	# Reshape
 	sensitivities = reshape(sensitivities, num_spatial, num_channels)
 
-	# Allocate
-	Sx = Array{ComplexF64, 3}(undef, num_spatial, num_channels, num_dynamic)
-	SHy = Array{ComplexF64, 2}(undef, num_spatial, num_dynamic)
-	vec_Sx = vec(Sx)
-	vec_SHy = vec(SHy)
-
 	# TODO: make a reallocating version of this
-	S = LinearOperator(
+	S = LinearOperator{T}(
 		(output_dim, input_dim),
-		x -> begin
-			x = reshape(x, num_spatial, num_dynamic)
-			for t = 1:num_dynamic, c = 1:num_channels
-				Threads.@threads for i = 1:num_spatial
-					@inbounds Sx[i, c, t] = sensitivities[i, c] * x[i, t]
+		(y, x) -> begin
+			xs = reshape(x, num_spatial, num_other)
+			ys = reshape(y, num_spatial, num_channels, num_other)
+			# TODO turbo
+			Threads.@threads for I in CartesianIndices((num_spatial, num_channels, num_other))
+				@inbounds ys[I] = sensitivities[I[1], I[2]] * xs[I[1], I[3]]
+			end
+			y
+		end;
+		adj = (x, y) -> begin
+			# Reset output
+			turbo_wipe!(x)
+			# Reshape arrays
+			xs = reshape(x, num_spatial, num_other)
+			ys = reshape(y, num_spatial, num_channels, num_other)
+			# Set up threading
+			niter = num_spatial * num_other
+			nthreads = min(Threads.nthreads(), niter)
+			@sync for tid = 1:nthreads
+				Threads.@spawn let
+					start, stop = ThreadTools.thread_region(tid, niter, nthreads)
+					for i = start:stop, c = 1:num_channels
+						o, s = divrem(i-1, num_spatial) .+ 1
+						# TODO: There is still one cache miss, it would be better to go s, c, o instead of s, o, c
+						# but the s-o plane is weirdly cut by threads so need different strategy
+						@inbounds xs[s, o] += conj(sensitivities[s, c]) * ys[s, c, o]
+					end
 				end
 			end
-			vec_Sx
+			x
 		end,
-		y -> begin
-			y = reshape(y, num_spatial, num_channels, num_dynamic)
-			SHy .= 0
-			for n = 1:num_dynamic, c = 1:num_channels
-				Threads.@threads for i = 1:num_spatial
-					@inbounds SHy[i, n] += conj(sensitivities[i, c]) * y[i, c, n]
-				end
-			end
-			vec_SHy
-		end
+		out=check_allocate(Sx, num_spatial * num_channels * num_other),
+		out_adj_inv=check_allocate(SHy, num_spatial * num_other)
 	)
-	return S, reshape(Sx, shape..., num_dynamic)
+	return S
 end
 
 """

@@ -6,41 +6,35 @@
 	If the user decides to mix spatial and other dimensions, good luck!
 	Pay attention that they have to be applied in pairs! Otherwise scaling
 """
-function plan_fourier_transform!(
-	FHy::Array{T, N},
+function plan_fourier_transform(
+	y::AbstractArray{<: T, N},
 	dims::Union{Integer, NTuple{M, Integer} where M, AbstractVector{<: Integer}};
 	kwargs...
-) where {N, T}
-
-	# TODO: write Fx also in Fhy and rename it to sth more generic, this is for the case when x shall not be mutated
-
-	# Arrays for in-place operations
-	Fx = similar(FHy)
-	vec_Fx = vec(Fx)
-	vec_FHy = vec(FHy)
+) where {T <: Complex, N}
 
 	# Plan FFTs
-	FFT = plan_fft(Fx, dims; kwargs...)
-	FFTH = plan_ifft(FHy, dims; kwargs...)
+	FFT = plan_fft(y, dims; kwargs...)
+	FFTH = plan_ifft(y, dims; kwargs...)
 
 	# Reshaping
-	shape = size(FHy)
-	restore_shape(z) = reshape(z, shape) # Note that z is vector
+	shape = size(y)
 
 	# Define linear operator
 	F = UnitaryOperator{T}(
 		prod(shape),
-		x -> begin
-			mul!(Fx, FFT, restore_shape(x))
-			vec_Fx
+		(y, x) -> begin
+			mul!(reshape(y, shape), FFT, reshape(x, shape))
+			y
+		end;
+		adj = (x, y) -> begin
+			mul!(reshape(x, shape), FFTH, reshape(y, shape))
+			x
 		end,
-		y -> begin
-			mul!(FHy, FFTH, restore_shape(y))
-			vec_FHy
-		end
+		out=vec(y)
 	)
 	return F
 end
+
 """
 In-place
 """
@@ -60,49 +54,59 @@ function plan_fourier_transform!(
 	FFT = plan_fft!(z, dims; kwargs...)
 	FFTH = plan_ifft!(z, dims; kwargs...)
 
-	# Reshaping and views
-	restore_shape(z) = reshape(z, shape) # Note that z is a vector here
-
 	# Define linear operator
 	F = UnitaryOperator{T}(
 		prod(shape),
-		x -> begin
-			FFT * restore_shape(x) # In place
+		(y, x) -> begin
+			@assert length(y) == 0
+			FFT * reshape(x, shape) # In place
 			x
-		end,
-		y -> begin
-			FFTH * restore_shape(y) # In place
+		end;
+		adj = (x, y) -> begin
+			@assert length(x) == 0
+			FFTH * reshape(y, shape) # In place
 			y
 		end
 	)
 	return F
 end
 
+# TODO: unified concept for putting the shape first for all plan_...() functions
+
+function fourier_transform_size(k1::AbstractVector{<: Number}, k2::AbstractVector{<: Number}, shape::NTuple{3, Integer})
+	num_frequencies = length(k1)
+	@assert length(k2) == num_frequencies
+	spatial_length = shape[1] * shape[2]
+	other_dims = shape[3]
+	num_in = spatial_length * other_dims
+	num_out = num_frequencies * other_dims
+	return (num_out, num_in)
+end
 
 """
 	Not side effect free
 """
-function plan_fourier_transform(k1, k2, shape::NTuple{3, Integer}; eps::Real=1e-8, dtype::Type{T}=ComplexF64, kwargs...) where T <: Complex
-	FHy = Array{T, 3}(undef, shape)
-	return plan_fourier_transform!(FHy, k1, k2, shape; kwargs...)
-end
-function plan_fourier_transform!(
-	FHy::Array{T, 3},
+function plan_fourier_transform(
 	k1::Vector{<: Number},
 	k2::Vector{<: Number},
 	shape::NTuple{3, Integer};
+	dtype::Type{T}=ComplexF64,
+	Fx::AbstractVector{<: T}=empty(Vector{dtype}),
+	FHy::AbstractVector{<: T}=empty(Vector{dtype}),
 	eps::Real=1e-8,
 	upsampling=2,
 	kwargs...
 ) where T <: Complex
 
-	# Get dims
+	# Dimensions
+	num_out, num_in = fourier_transform_size(k1, k2, shape)
 	num_frequencies = length(k1)
-	@assert length(k2) == num_frequencies
 	spatial_dims = [shape[1], shape[2]]
-	spatial_length = prod(spatial_dims)
-	other_dims = shape[3] 
-	@assert size(FHy) == shape
+	other_dims = shape[3]
+
+	# Allocate output
+	Fx = check_allocate(Fx, num_out)
+	FHy = check_allocate(FHy, num_in)
 
 	# Plan NUFFT
 	forward_plan = finufft_makeplan(
@@ -133,81 +137,245 @@ function plan_fourier_transform!(
 			end
 		end
 	end
-	normalisation = 1 / spatial_length
+	normalisation = 1 / prod(spatial_dims)
 	finufft_setpts!(forward_plan, k1, k2)
 	finufft_setpts!(backward_plan, k1, k2)
 
-	# Allocate output
-	Fx = Array{T, 2}(undef, num_frequencies, other_dims)
-	vec_Fx = vec(Fx)
-	vec_FHy = vec(FHy)
-
 	# Linear operators
 	F = LinearOperator{T}(
-		(num_frequencies * other_dims, spatial_length * other_dims),
-		x -> begin
-			finufft_exec!(forward_plan, reshape(x, shape), Fx)
-			vec_Fx
-		end,
-		y -> begin
-			finufft_exec!(backward_plan, reshape(y, num_frequencies, other_dims), FHy)
-			# TODO: LoopVectorization
-			Threads.@threads for i in eachindex(FHy)
-				@inbounds FHy[i] *= normalisation
+		(num_out, num_in),
+		(y, x) -> begin
+			finufft_exec!(forward_plan, reshape(x, shape), reshape(y, num_frequencies, other_dims))
+			y
+		end;
+		adj = (x, y) -> begin
+			finufft_exec!(backward_plan, reshape(y, num_frequencies, other_dims), reshape(x, shape))
+			xd = decomplexify(x)
+			@tturbo for i in 1:length(xd)
+				xd[i] *= normalisation
 			end
-			vec_FHy
-		end
+			x
+		end,
+		out=Fx,
+		out_adj_inv=FHy
 	)
 	return F
 end
 
-function plan_toeplitz_embedding(
+
+# Convolution
+function apply_convolution_kernel!(Fx::AbstractMatrix{<: Complex}, Fcd::AbstractMatrix{<: Real})
+	@assert size(Fcd, 2) == size(Fx, 1)
+	Fxd = decomplexify(Fx)
+	@tturbo for j in axes(Fxd, 3), i in axes(Fxd, 2)
+		v_re = Fxd[1, i, j]
+		v_im = Fxd[2, i, j]
+		w_re = Fcd[1, i]
+		w_im = Fcd[2, i]
+		Fxd[1, i, j] = v_re * w_re - v_im * w_im
+		Fxd[2, i, j] = v_re * w_im + v_im * w_re
+	end
+	return Fx
+	#for J in CartesianIndices(shape[M+1:N])
+	#	Threads.@threads for I in CartesianIndices(Fc)
+	#		@inbounds @fastmath Fx[I, J] *= Fc[I]
+	#	end
+	#end
+end
+
+function prepare_periodic_convolution(y::AbstractArray{T, N}, c::AbstractArray{T, M}; kwargs...) where {T <: Number, N, M}
+	shape = size(y)
+	F = plan_fft!(y, 1:M; kwargs...)
+	FH_unnormalised = plan_bfft!(y, 1:M; kwargs...) # In-place
+	# Precompute kernel, cannot use F in general due to different shapes.
+	Fc = fft(c, 1:M) ./ prod(shape[1:M]) # fft normalisation included here
+	Fcd = decomplexify(vec(Fc)) # This is a Matrix
+	# Define convolution operator
+	y_matrix_shape = (prod(shape[1:M]), prod(shape[M+1:N]))
+	return F, FH_unnormalised, Fcd, y_matrix_shape
+end
+
+"""
+	Not side effect free
+	Only complex data due to type stability
+"""
+# TODO: Real version?
+function plan_periodic_convolution(
+	y::AbstractArray{<: T, N}, # Output
+	c::AbstractArray{<: Number, M};
+	kwargs...
+) where {T <: Complex, N, M}
+	# Array for in-place operations
+	F, FH_unnormalised, Fcd, y_matrix_shape = prepare_periodic_convolution(y, c; kwargs...)
+	shape = size(y)
+	C = HermitianOperator{T}(
+		prod(shape),
+		(y, x) -> begin
+			Fx = reshape(y, shape)
+			# Fourier transform
+			mul!(Fx, F, reshape(x, shape))
+			# Multiply with transformed kernel
+			apply_convolution_kernel!(reshape(Fx, y_matrix_shape), Fcd)
+			# Transform back
+			FH_unnormalised * Fx # in-place
+			y
+		end;
+		out=vec(y)
+	)
+	return C, Fx
+end
+
+function plan_periodic_convolution!(shape::NTuple{N, Integer}, c::AbstractArray{T, M}; kwargs...) where {T <: Number, N, M}
+	# Plan Fourier
+	if haskey(kwargs, :flags) && kwargs[:flags] in (FFTW.MEASURE, FFTW.PATIENT)
+		y = Array{T, N}(undef, shape)
+	else
+		y = FFTW.FakeArray{T, N}(shape, cumprod((1, shape[1:N-1]...)))
+	end
+	F, FH_unnormalised, Fcd, y_matrix_shape = prepare_periodic_convolution(y, shape, c; kwargs...)
+	C = HermitianOperator{complex(T)}(
+		prod(shape),
+		(y, x) -> begin
+			@assert length(y) == 0
+			# Fourier transform
+			Fx = F * reshape(x, shape) # in-place
+			# Multiply with transformed kernel
+			apply_convolution_kernel!(reshape(Fx, y_matrix_shape), Fcd)
+			# Transform back
+			FH_unnormalised * Fx # in-place
+			x
+		end
+	)
+	return C
+end
+
+"""
+	Circular convolution
+	This should be available in DSP.jl
+"""
+function periodic_conv(u::AbstractArray{<: Number}, v::AbstractArray{<: Number})
+	# TODO: Pad to same size
+	F = plan_fft(u)
+	FH = inv(F)
+	FH * ((F * u) .* (F * v))
+end
+
+
+
+
+function apply_toeplitz!(
+	y::AbstractArray{T, N},
+	x::AbstractArray{T, N},
+	padded::AbstractArray{T, N},
+	C::HermitianOperator{T}
+) where {T <: Complex, N}
+	# Dimensions and checks
+	shape = size(x)[1:N-1] # First axis is length 2, decomplexified
+	double_shape = size(padded)[1:N-1]
+	num_other = size(x, N)
+	@assert num_other == size(padded, N)
+	# Reshape and decomplexify arrays
+	(x_d, y_d) = decomplexify.((x, y))
+	padded_d = decomplexify(padded)
+	# Zero fill padded array
+	@tturbo for i in 1:length(padded_d)
+		padded_d[i] = 0
+	end
+	# Pad x into padded
+	zero_offset = Tuple(0 for _ = 1:N+1)
+	offset = (0, centre_offset.(shape)..., 0)
+	shape_d = (2, shape..., num_other)
+	turbo_block_copyto!(padded_d, x_d, shape_d, offset, zero_offset)
+	# Convolve
+	C * vec(padded) # in-place
+	# Crop into y
+	turbo_block_copyto!(y_d, padded_d, shape_d, zero_offset, offset)
+	return y
+end
+
+# TODO: Upsampling can only be two here actually, the user must ensure everything is in the FOV!
+toeplitz_padded_size(shape::NTuple{3, Integer}; upsampling::Integer=2) = ((upsampling .* shape[1:2])..., shape[3])
+function prepare_toeplitz(
+	padded::AbstractArray{<: T, 3},
 	k1::Vector{<: Number},
 	k2::Vector{<: Number},
-	shape::NTuple{3, Integer};
-	dtype::Type{T}=ComplexF64,
-	weights::AbstractVector{<: Number}=ones(Complex{dtype}, length(k1)),
-	eps::Real=1e-8,
-	upsampling::Integer=2,
-	finufft_kwargs::Dict=Dict(),
-	fftw_flags=FFTW.MEASURE
+	weights::AbstractVector{<: Number},
+	shape::NTuple{3, Integer}, # (spatial 1, spatial 2, other)
+	dtype::Type{T},
+	eps::Real,
+	upsampling::Integer,
+	finufft_kwargs::Dict,
+	fftw_flags
 ) where T <: Complex
 	@assert length(k1) == length(k2) == length(weights)
-	upsampled_shape = upsampling .* shape[1:2]
-	num_x = prod(shape[1:2])
-
+	upsampled_shape = toeplitz_padded_size(shape, upsampling)
 	# Compute convolution function (essentially point-spread-function)
 	q = nufft2d1(
 		k1, k2,
-		(weights ./ num_x),
+		(weights ./ prod(shape[1:2])),
 		1,
 		eps,
-		upsampled_shape...;
+		upsampled_shape[1:2]...;
 		dtype=real(T),
 		modeord=1, # Required to get the "fftshifted" version
 		upsampfac=upsampling,
 		finufft_kwargs...
 	)
 	# Plan convolution operator
-	C, y_padded = plan_periodic_convolution((upsampled_shape..., shape[3]), q; flags=fftw_flags)
+	C = plan_periodic_convolution!(upsampled_shape, dropdims(q; dims=3); flags=fftw_flags)
+	# Preallocate output (if necessary)
+	padded = check_allocate(padded, upsampled_shape)
+	return C, padded
+end
+function plan_toeplitz(
+	y::AbstractArray{<: T, 3},
+	k1::Vector{<: Number}, # FINUFFT doesn't like anything but actual vectors
+	k2::Vector{<: Number},
+	weights::AbstractVector{<: Number};
+	dtype::Type{T}=ComplexF64,
+	padded::AbstractArray{<: T, 3}=empty(Array{T, 3}),
+	eps::Real=1e-8,
+	upsampling::Integer=2,
+	finufft_kwargs::Dict=Dict(),
+	fftw_flags=FFTW.MEASURE
+) where T <: Complex
+	shape = size(y)
+	# Prepare convolution and padded array
+	C, padded = prepare_toeplitz(padded, k1, k2, weights, shape, dtype, eps, upsampling, finufft_kwargs, fftw_flags)
+	# Toeplitz Embedding operator
+	FHMF = HermitianOperator{T}(
+		prod(shape),
+		(y, x) -> begin
+			apply_toeplitz!(reshape(y, shape), reshape(x, shape), padded, C)
+			y
+		end;
+		out=vec(y)
+	)
+	return FHMF
+end
 
-	# Allocate memory
-	x_padded = Array{T, 3}(undef, upsampled_shape..., shape[3])
-	vec_x_padded = vec(x_padded)
-	y = Array{T, 3}(undef, shape)
-	vec_y = vec(y)
-	centre = MRIRecon.centre_indices.(upsampled_shape, shape[1:2])
-	centre_of_y_padded = @view y_padded[centre..., :]
-
+function plan_toeplitz!(
+	k1::Vector{<: Number},
+	k2::Vector{<: Number},
+	weights::AbstractVector{<: Number},
+	shape::NTuple{3, Integer}; # (spatial 1, spatial 2, other)
+	dtype::Type{T}=ComplexF64,
+	padded::AbstractArray{<: T, 3}=empty(Array{T, 3}),
+	eps::Real=1e-8,
+	upsampling::Integer=2,
+	finufft_kwargs::Dict=Dict(),
+	fftw_flags=FFTW.MEASURE
+) where T <: Complex
+	# Prepare padded array and convolution
+	C, padded = prepare_toeplitz(padded, k1, k2, weights, shape, dtype, eps, upsampling, finufft_kwargs, fftw_flags)
 	# Toeplitz Embedding
 	FHMF = HermitianOperator{T}(
-		num_x * shape[3],
-		x -> begin
-			@inbounds x_padded[centre..., :] = x
-			vec_y_padded = C * vec_x_padded
-			# Basically: y_padded = reshape(vec_y_padded, upsampled_shape..., shape[3])
-			@inbounds vec_y[:] = centre_of_y_padded
-			vec_y
+		prod(shape),
+		(y, x) -> begin
+			@assert length(y) == 0
+			xs = reshape(x, shape)
+			apply_toeplitz!(xs, xs, padded, F, FH_unnormalised)
+			y
 		end
 	)
 	return FHMF
@@ -245,7 +413,7 @@ end
 	cexp = exp(im * 2π / size(f, 1))^x
 
 """
-# TODO: Inbounds
+# TODO: check sizes and inbounds
 @generated function mini_dft!(
 	cexp::Complex,
 	f::AbstractArray{<: Number, N},
@@ -392,10 +560,13 @@ for (func, op) in ( (:fftshift, :(.+)), (:ifftshift, :(.-)) )
 			shift = shape .÷ 2
 			for i in eachindex(indices)
 				indices[i] = CartesianIndex(
-					(mod1(
-						$(Expr(:call, op, :(indices[i][j]), :(shift[j]))), # index ± shift
-						shape[j]
-					) for j = 1:N)...
+					ntuple(
+						j -> mod1(
+							$(Expr(:call, op, :(indices[i][j]), :(shift[j]))), # index ± shift
+							shape[j]
+						),
+						N
+					)
 				)
 			end
 			return indices
@@ -405,7 +576,7 @@ for (func, op) in ( (:fftshift, :(.+)), (:ifftshift, :(.-)) )
 			indices::AbstractVector{<: CartesianIndex{N}},
 			shape::NTuple{N, Integer},
 			dims
-		) where {N,M}
+		) where N
 			indices = copy(indices)
 			shift = shape .÷ 2
 			tmp = Vector{Int64}(undef, N)
@@ -422,47 +593,6 @@ for (func, op) in ( (:fftshift, :(.+)), (:ifftshift, :(.-)) )
 			return indices
 		end
 	end
-end
-
-
-"""
-	Not side effect free
-"""
-function plan_periodic_convolution(shape::NTuple{N, Integer}, c::AbstractArray{T, M}; kwargs...) where {T <: Number, N, M, D}
-	# Array for in-place operations
-	Fx = Array{complex(T), N}(undef, shape)
-	vec_xc = vec(Fx)
-	# Plan Fourier
-	F = plan_fft(Fx, 1:M; kwargs...)
-	FH_unnormalised = plan_bfft!(Fx, 1:M; kwargs...) # In-place
-	# Precompute kernel, cannot use F in general due to different shapes.
-	Fc = fft(c, 1:M) ./ prod(shape[1:M]) # fft normalisation included here
-	# Define convolution operator
-	C = HermitianOperator{complex(T)}(
-		prod(shape),
-		x -> begin
-			mul!(Fx, F, reshape(x, shape))
-			# Compute Fx .*= Fc
-			for J in CartesianIndices(shape[M+1:N])
-				Threads.@threads for I in CartesianIndices(Fc)
-					@inbounds Fx[I, J] *= Fc[I]
-				end
-			end
-			xc = FH_unnormalised * Fx # in-place, so just a change of names
-			vec_xc
-		end
-	)
-	return C, Fx
-end
-"""
-	Circular convolution
-	This should be available in DSP.jl
-"""
-function periodic_conv(u::AbstractArray{<: Number}, v::AbstractArray{<: Number})
-	# TODO: Pad to same size
-	F = plan_fft(u)
-	FH = inv(F)
-	FH * ((F * u) .* (F * v))
 end
 
 

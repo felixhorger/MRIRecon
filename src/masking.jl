@@ -127,6 +127,7 @@ end
 function apply_sparse_mask!(a::Array{<: Number, N}, indices_to_mask::Vector{Vector{CartesianIndex{D}}}) where {N, D}
 	@assert N == D + 3 # Readout, channels, dynamic
 	for j = 1:size(a, N)
+		# TODO: Maybe threads?
 		@inbounds for i in indices_to_mask[j]
 			a[:, i, :, j] .= 0
 		end
@@ -147,7 +148,7 @@ end
 	indices outside shape are ignored!
 	shape = (readout, phase encode ..., channels, num_dynamic)
 """
-function plan_masking(
+function plan_masking!(
 	indices::AbstractVector{<: CartesianIndex{N}},
 	shape::NTuple{M, Integer};
 	dtype::Type=ComplexF64 # Needed for type stability
@@ -161,7 +162,8 @@ function plan_masking(
 	# Construct linear operator
 	U = HermitianOperator{dtype}(
 		prod(shape),
-		x -> begin
+		(y, x) -> begin
+			@assert length(y) == 0
 			x_in_shape = reshape(x, shape)
 			apply_sparse_mask!(x_in_shape, indices_to_mask)
 			x
@@ -170,6 +172,117 @@ function plan_masking(
 
 	return U
 end
+
+function plan_regular_undersampling!(
+	shape::NTuple{D, Integer},
+	dim::Integer,
+	r::Integer,
+	offset::Integer;
+	dtype::Type=ComplexF64 # Needed for type stability
+) where D
+	num_full = prod(shape)
+	num_dim = shape[dim]
+	stride_dim = prod(shape[1:dim-1])
+	U = HermitianOperator{dtype}(
+		prod(shape),
+		(y, x) -> begin
+			# length of x is checked by LinearOperators.jl
+			@assert length(y) == 0
+			Threads.@threads for i = 1:num_full
+				# Get index of dim
+				j = mod1((i-1) ÷ stride_dim + 1, num_dim)
+				mod1(j, r) == offset && continue
+				@inbounds x[i] = 0
+			end
+			x
+		end
+	)
+	return U
+end
+
+
+"""
+l linear index of full array
+i_dim index of dimension in full array == i_dim = mod1((i-1) ÷ stride_dim + 1, num_dim)
+step slicing step
+offset first element, i.e. offset:step:end
+"""
+function sliced_index(l::Integer, step::Integer, offset::Integer, num_dim::Integer, stride_dim::Integer, stride_after::Integer)
+	l_dim_div, i_before = divrem(l-1, stride_dim)
+	i_dim = mod(l_dim_div, num_dim) + 1
+	mod1(i_dim, step) != offset && return 0
+	i_after = l_dim_div ÷ num_dim
+	return (
+		1 + i_before
+		+ ((i_dim - offset) ÷ step) * stride_dim
+		+ i_after * stride_after
+	)
+
+end
+
+function plan_regular_undersampling(
+	shape::NTuple{D, Integer},
+	dim::Integer,
+	r::Integer,
+	offset::Integer;
+	dtype::Type{T}=ComplexF64, # Needed for type stability
+	Ux::AbstractVector{<: T}=empty(Vector{dtype}),
+	UHy::AbstractVector{<: T}=empty(Vector{dtype}),
+) where {D, T <: Number}
+	@assert offset ≤ r
+	@assert 0 < dim ≤ D
+	@assert iseven(shape[dim]) "Odd dimension is not supported due to fftshift, not implemented"
+	num_full = prod(shape)
+	num_dim = shape[dim]
+	stride_dim = prod(shape[1:dim-1])
+	num_dim_undersampled = (shape[dim] - offset) ÷ r + 1
+	stride_after = stride_dim * num_dim_undersampled
+	num_undersampled = num_dim_undersampled * prod(shape[1:dim-1]) * prod(shape[dim+1:D])
+	U = LinearOperator{dtype}(
+		(num_undersampled, num_full),
+		(y, x) -> begin
+			# Lengths checked by LinearOperators.jl
+			@inbounds Threads.@threads for i = 1:num_full
+				k = sliced_index(i, r, offset, num_dim, stride_dim, stride_after)
+				k == 0 && continue
+				y[k] = x[i]
+			end
+			y
+		end;
+		adj = (x, y) -> begin
+			# Lengths checked by LinearOperators.jl
+			@inbounds Threads.@threads for i = 1:num_full
+				k = sliced_index(i, r, offset, num_dim, stride_dim, stride_after)
+				if k != 0
+					x[i] = y[k]
+				else
+					x[i] = 0
+				end
+			end
+			x
+		end,
+		out=check_allocate(Ux, num_undersampled),
+		out_adj_inv=check_allocate(UHy, num_full)
+	)
+	return U
+end
+
+#= Instead of FT -> masking -> iFT, one can just sum up array elements (convolution)
+Since sampling is regular, the convolution is trivial to compute.
+This is not useful for what I need:
+
+A = S' Fz' Fxy' M M_z Fxy Fz S  =  S' Fz' M_z Fz Fxy' M Fxy S
+
+M_z is a low-rank mixing matrix with (1, 0, 1, 0...) along the diagonal.
+half the memory could be saved by not "accumulating" Fz' M_z Fz.
+
+For some other scenario it might be of use though, say full sampling along x and y
+and r = 2 along partitions:
+A = S' Fz' Fxy' Uz Fxy Fz S = S' Fz' Uz Fz S = S' Tz S
+
+function plan_regular_undersampling_toeplitz()
+end
+=#
 
 
 """
@@ -222,6 +335,8 @@ function sparse2dense_trunc(
 	return b
 end
 
+
+@inline centre_offset(i::Integer) = (i ÷ 2) + mod(i, 2)
 
 # TODO: Maybe rewrite this to use CartesianIndices
 function centre_indices(shape::Integer, centre_size::Integer)

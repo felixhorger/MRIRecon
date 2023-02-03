@@ -4,7 +4,7 @@
 
 	Convenience and reminder, helps keeping scripts clean of excess information.
 """
-function sensitivites_size(shape::Tuple{Vararg{Integer}}, num_channels::Integer, num_other::Integer)
+function sensitivities_size(shape::Tuple{Vararg{Integer}}, num_channels::Integer, num_other::Integer)
 	other_length = prod(shape) * num_other
 	return (other_length * num_channels, other_length)
 end

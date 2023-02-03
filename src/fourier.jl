@@ -73,9 +73,7 @@ end
 
 # TODO: unified concept for putting the shape first for all plan_...() functions
 
-function fourier_transform_size(k1::AbstractVector{<: Number}, k2::AbstractVector{<: Number}, shape::NTuple{3, Integer})
-	num_frequencies = length(k1)
-	@assert length(k2) == num_frequencies
+function fourier_transform_size(num_frequencies::Integer, shape::NTuple{3, Integer})
 	spatial_length = shape[1] * shape[2]
 	other_dims = shape[3]
 	num_in = spatial_length * other_dims
@@ -99,7 +97,9 @@ function plan_fourier_transform(
 ) where T <: Complex
 
 	# Dimensions
-	num_out, num_in = fourier_transform_size(k1, k2, shape)
+	num_frequencies = length(k1)
+	@assert length(k2) == num_frequencies
+	num_out, num_in = fourier_transform_size(num_frequencies, shape)
 	num_frequencies = length(k1)
 	spatial_dims = [shape[1], shape[2]]
 	other_dims = shape[3]

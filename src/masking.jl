@@ -220,6 +220,22 @@ function sliced_index(l::Integer, step::Integer, offset::Integer, num_dim::Integ
 
 end
 
+
+
+regularly_undersampled_length(full::Integer, offset::Integer, r::Integer) = (full - offset) ÷ r + 1
+function regular_undersampling_size(
+	shape::NTuple{D, Integer},
+	dim::Integer,
+	r::Integer,
+	offset::Integer
+) where D
+	@assert offset ≤ r
+	@assert 0 < dim ≤ D
+	num_full = prod(shape)
+	num_dim_undersampled = regularly_undersampled_length(shape[dim], offset, r)
+	num_undersampled = num_dim_undersampled * prod(shape[1:dim-1]) * prod(shape[dim+1:D])
+	return num_undersampled, num_full
+end
 function plan_regular_undersampling(
 	shape::NTuple{D, Integer},
 	dim::Integer,
@@ -232,12 +248,11 @@ function plan_regular_undersampling(
 	@assert offset ≤ r
 	@assert 0 < dim ≤ D
 	@assert iseven(shape[dim]) "Odd dimension is not supported due to fftshift, not implemented"
-	num_full = prod(shape)
 	num_dim = shape[dim]
 	stride_dim = prod(shape[1:dim-1])
-	num_dim_undersampled = (shape[dim] - offset) ÷ r + 1
+	num_dim_undersampled = regularly_undersampled_length(shape[dim], offset, r)
 	stride_after = stride_dim * num_dim_undersampled
-	num_undersampled = num_dim_undersampled * prod(shape[1:dim-1]) * prod(shape[dim+1:D])
+	num_undersampled, num_full = regular_undersampling_size(shape, dim, r, offset)
 	U = LinearOperator{dtype}(
 		(num_undersampled, num_full),
 		(y, x) -> begin

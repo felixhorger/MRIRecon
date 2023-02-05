@@ -49,7 +49,7 @@ function plan_fourier_transform!(
 	if haskey(kwargs, :flags) && kwargs[:flags] in (FFTW.MEASURE, FFTW.PATIENT)
 		z = Array{T, N}(undef, shape)
 	else
-		z = FFTW.FakeArray{T, N}(shape, cumprod((1, shape[1:N-1]...)))
+		z = FakeArray{T, N}(shape, cumprod((1, shape[1:N-1]...)))
 	end
 	FFT = plan_fft!(z, dims; kwargs...)
 	FFTH = plan_ifft!(z, dims; kwargs...)
@@ -230,7 +230,7 @@ function plan_periodic_convolution!(shape::NTuple{N, Integer}, c::AbstractArray{
 	if haskey(kwargs, :flags) && kwargs[:flags] in (FFTW.MEASURE, FFTW.PATIENT)
 		y = Array{T, N}(undef, shape)
 	else
-		y = FFTW.FakeArray{T, N}(shape, cumprod((1, shape[1:N-1]...)))
+		y = FakeArray{T, N}(shape, cumprod((1, shape[1:N-1]...)))
 	end
 	F, FH_unnormalised, Fcd, y_matrix_shape = prepare_periodic_convolution(y, shape, c; kwargs...)
 	C = HermitianOperator{complex(T)}(

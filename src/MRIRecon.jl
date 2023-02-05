@@ -9,6 +9,7 @@ module MRIRecon
 	using LoopVectorizationTools
 	import ThreadTools
 	using FFTW
+	using FFTW: FakeArray
 	using FINUFFT
 	using LinearOperators
 	using MRIHankel

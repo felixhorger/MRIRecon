@@ -10,7 +10,7 @@ function sampling_mask(
 ) where N
 	b = zeros(Bool, 1, shape..., num_dynamic) # The one is for the readout axis
 	for (i, j) in enumerate(indices)
-		b[1, j, mod1(i, num_dynamic)] += 1
+		b[1, j, mod1(i, num_dynamic)] = true
 	end
 	return b
 end
@@ -68,19 +68,12 @@ function unsampled_indices(
 	shape::NTuple{N, Integer},
 	num_dynamic::Integer
 ) where N
-
 	# Split into dynamic frames
 	split_indices = split_sampling(indices, num_dynamic)
-
 	# Sort within each dynamic frame and find unsampled indices
 	indices_to_mask = Vector{Vector{CartesianIndex{N}}}(undef, num_dynamic)
-	let
-		linear_indices = LinearIndices(shape)
-		by = (t::CartesianIndex{N} -> linear_indices[t])
-		@views for j = 1:num_dynamic
-			sort!(split_indices[j]; by)
-			indices_to_mask[j] = unsampled_indices(split_indices[j], shape)
-		end
+	@views for j = 1:num_dynamic
+		indices_to_mask[j] = unsampled_indices(split_indices[j], shape)
 	end
 	return indices_to_mask
 end
@@ -94,20 +87,20 @@ function split_sampling(
 	indices::AbstractVector{<: CartesianIndex{N}},
 	num_dynamic::Integer
 ) where N
-
 	min_indices_per_dynamic = length(indices) ÷ num_dynamic
-	split_indices = [
-		Vector{CartesianIndex{N}}(
-			undef,
-			min_indices_per_dynamic + (j > mod(length(indices), num_dynamic) ? 0 : 1)
-		)
-		for j in 1:num_dynamic
-	]
-	split_i = zeros(Int64, num_dynamic)
+	split_indices = Vector{Vector{CartesianIndex{N}}}(undef, num_dynamic)
+	for j = 1:num_dynamic
+		ind = Vector{CartesianIndex{N}}(undef, 0)
+		sizehint!(ind, min_indices_per_dynamic + (j > mod(length(indices), num_dynamic) ? 0 : 1))
+		split_indices[j] = ind
+	end
+	linear_indices = LinearIndices(shape)
 	for i in eachindex(indices)
+		index = indices[i]
 		j = mod1(i, num_dynamic)
-		split_i[j] += 1
-		split_indices[j][split_i[j]] = indices[i]
+		indices_of_dynamic = split_indices[j]
+		k = searchsortedfirst(indices_of_dynamic, index; by=(c::CartesianIndex{N} -> linear_indices[c]))
+		insert!(indices_of_dynamic, k, index)
 	end
 	return split_indices
 end
@@ -220,7 +213,6 @@ function sliced_index(l::Integer, step::Integer, offset::Integer, num_dim::Integ
 		+ ((i_dim - offset) ÷ step) * stride_dim
 		+ i_after * stride_after
 	)
-
 end
 
 
@@ -302,6 +294,65 @@ function plan_regular_undersampling_toeplitz()
 end
 =#
 
+"""
+	Convert CartesianIndex to Int first using linear indices: LinearIndices(shape)[cartesian_indices]
+	Go through a, split indices into dynamics and if an index is already there,
+	then add that k-space value to the one already registered and put zero into the duplicate.
+	Also remember how many duplicates there are, and finally divide by those counts.
+	This then enables to use the functions sparse2dense() and lowrank_sparse2dense (from MRFingerprinting.jl)
+"""
+function average_duplicates!(a::AbstractArray{<: Number, 3}, indices::AbstractVector{<: Integer}, num_dynamic::Integer)
+	@assert size(a, 3) == length(indices)
+	# Setup arrays
+	min_indices_per_dynamic = length(indices) ÷ num_dynamic
+	split_indices = Vector{Vector{Int}}(undef, num_dynamic) # Sampled indices split into dynamics
+	split_indices_a = Vector{Vector{Int}}(undef, num_dynamic) # corresponding indices in a
+	num_duplicates = Dict{Int, Int}() # index in a => number of samples
+	# Setup sub-arrays and give size hints
+	for j = 1:num_dynamic
+		ind = Vector{Int}(undef, 0)
+		ind_a = Vector{Int}(undef, 0)
+		expected_length = min_indices_per_dynamic + (j > mod(length(indices), num_dynamic) ? 0 : 1)
+		sizehint!.((ind, ind_a), expected_length)
+		split_indices[j] = ind
+		split_indices_a[j] = ind_a
+	end
+	# First samples go untouched
+	for i = 1:num_dynamic
+		push!(split_indices[i], indices[i])
+		push!(split_indices_a[i], i)
+	end
+	# For all other samples need to check if already sampled at that dynamic
+	for i = num_dynamic+1:length(indices)
+		index = indices[i]
+		j = mod1(i, num_dynamic)
+		indices_of_dynamic = split_indices[j]
+		k = searchsortedfirst(indices_of_dynamic, index)
+		other_index = indices_of_dynamic[k]
+		if other_index == index
+			i_before = split_indices_a[j][k]
+			@views begin
+				a[:, :, i_before] .+= a[:, :, i]
+				a[:, :, i] .= 0
+			end
+			if !haskey(num_duplicates, i_before)
+				num_duplicates[i_before] = 2
+			else
+				num_duplicates[i_before] += 1
+			end
+		else
+			insert!(indices_of_dynamic, k, index)
+			insert!(split_indices_a[j], k, i)
+		end
+	end
+	# Finish averaging by dividing by number of duplicates
+	@views for (i, duplicates) in pairs(num_duplicates)
+		a[:, :, i] ./= duplicates
+	end
+	return a
+end
+
+
 
 """
 	For kspace data
@@ -321,6 +372,7 @@ function sparse2dense(
 	linear_indices = LinearIndices(shape)
 	perm = sortperm(indices; by=(k::CartesianIndex{N} -> linear_indices[k]))
 	b = zeros(eltype(a), size(a, 1), size(a, 2), shape..., num_dynamic)
+	# TODO: split indices, then iterate over that, also below
 	for i in eachindex(perm)
 		j = perm[i]
 		dynamic = mod1(j, num_dynamic)

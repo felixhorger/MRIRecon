@@ -437,20 +437,19 @@ z2 = reshape(A * vec_y, num_columns, num_lines, num_channels)
 @assert z1 ≈ z2
 
 
-# Basic fully sampled recon
-sensitivities = rand(ComplexF64, 64, 64, 4)
-x = rand(ComplexF64, 64, 64, 3)
+sensitivities = rand(ComplexF64, 64, 63, 32, 4)
+x = rand(ComplexF64, 64, 63, 32, 3)
 S = MRIRecon.plan_sensitivities(sensitivities, 3)
-y = reshape(x, 64, 64, 1, 3) .* reshape(sensitivities, 64, 64, 4, 1)
+y = reshape(x, 64, 63, 32, 1, 3) .* reshape(sensitivities, 64, 63, 32, 4, 1)
 @assert vec(y) ≈ (S * vec(x))
-z = sum(y .* reshape(conj.(sensitivities), 64, 64, 4, 1); dims=3)
+z = sum(y .* reshape(conj.(sensitivities), 64, 63, 32, 4, 1); dims=4)
 @assert vec(z) ≈ S' * vec(y)
 
 
 # Regular undersampling
-U_inplace = MRIRecon.plan_regular_undersampling!((32, 33, 2), 2, 4, 2)
-U = MRIRecon.plan_regular_undersampling((32, 33, 2), 2, 4, 2)
-a = rand(ComplexF64, 32, 33, 2)
+U_inplace = MRIRecon.plan_regular_undersampling!((32, 34, 2), 2, 4, 2)
+U = MRIRecon.plan_regular_undersampling((32, 34, 2), 2, 4, 2)
+a = rand(ComplexF64, 32, 34, 2)
 b = copy(a)
 a = reshape(U' * U * vec(a), 32, :, 2)
 U_inplace * vec(b)
@@ -465,4 +464,26 @@ axs[2, 1].set_title("a")
 axs[2, 1].imshow(abs.(a[:, :, 2]))
 axs[2, 2].set_title("b")
 axs[2, 2].imshow(abs.(b[:, :, 2]))
+
+
+# Remove duplicates
+num_dynamic = 3
+shape = (2, 3)
+sampling = LinearIndices(shape)[[
+	CartesianIndex(1, 1),
+	CartesianIndex(2, 2),
+	CartesianIndex(2, 3),
+	CartesianIndex(1, 1),
+	CartesianIndex(2, 2),
+	CartesianIndex(2, 3),
+	CartesianIndex(1, 1),
+	CartesianIndex(2, 2),
+	CartesianIndex(2, 3)
+]]
+a = rand(4, 5, 9)
+a_orig = copy(a)
+a = MRIRecon.average_duplicates!(a, sampling, num_dynamic)
+for i = 1:3
+	@assert a[:, :, i] ≈ sum(a_orig[:, :, i:3:end]; dims=3) / 3 "$i failed"
+end
 

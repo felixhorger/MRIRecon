@@ -10,17 +10,19 @@ function sampling_mask(
 ) where N
 	b = zeros(Bool, 1, shape..., num_dynamic) # The one is for the readout axis
 	for (i, j) in enumerate(indices)
-		b[1, j, mod1(i, num_dynamic)] = 1
+		b[1, j, mod1(i, num_dynamic)] += 1
 	end
 	return b
 end
 
 
-import Base: sort
-function sort(indices::AbstractVector{<: CartesianIndex{N}}, shape::NTuple{N, Integer}) where N
-	linear_indices = LinearIndices(shape)
-	sorted_indices = sort(indices; by=(k::CartesianIndex{N} -> linear_indices[k]))
-	return sorted_indices
+import Base: sort, sort!
+for name in (:sort, :sort!)
+	@eval function $name(indices::AbstractVector{<: CartesianIndex{N}}, shape::NTuple{N, Integer}) where N
+		linear_indices = LinearIndices(shape)
+		sorted_indices = $name(indices; by=(k::CartesianIndex{N} -> linear_indices[k]))
+		return sorted_indices
+	end
 end
 
 
@@ -113,7 +115,8 @@ end
 function is_unique_sampling(indices::AbstractVector{<: CartesianIndex{N}}, num_dynamic::Integer) where N
 	split_indices = split_sampling(indices, num_dynamic)
 	for i = 1:num_dynamic
-		length(Set(split_indices[i])) != length(split_indices[i]) && return false
+		allunique(split_indices[i]) && continue
+		return false
 	end
 	return true
 end
@@ -322,7 +325,7 @@ function sparse2dense(
 		j = perm[i]
 		dynamic = mod1(j, num_dynamic)
 		k = indices[j]
-		@views b[:, :, k, dynamic] = a[:, :, j]
+		@views b[:, :, k, dynamic] .+= a[:, :, j]
 	end
 	return b
 end
@@ -345,7 +348,7 @@ function sparse2dense_trunc(
 		k = indices[j]
 		any(ntuple(d -> k[d] ∉ roi[d], N)) && continue
 		dynamic = mod1(j, num_dynamic)
-		@views b[:, :, k - offset, dynamic] = a[:, :, j]
+		@views b[:, :, k - offset, dynamic] .+= a[:, :, j]
 	end
 	return b
 end

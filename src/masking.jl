@@ -16,16 +16,6 @@ function sampling_mask(
 end
 
 
-import Base: sort, sort!
-for name in (:sort, :sort!)
-	@eval function $name(indices::AbstractVector{<: CartesianIndex{N}}, shape::NTuple{N, Integer}) where N
-		linear_indices = LinearIndices(shape)
-		sorted_indices = $name(indices; by=(k::CartesianIndex{N} -> linear_indices[k]))
-		return sorted_indices
-	end
-end
-
-
 
 """
 	Given indices which are sampled, find the ones which are not sampled.
@@ -60,6 +50,32 @@ end
 	end
 end
 
+
+
+"""
+	One vector for each dynamic
+"""
+function split_sampling(
+	indices::AbstractVector{<: CartesianIndex{N}},
+	num_dynamic::Integer
+) where N
+	min_indices_per_dynamic = length(indices) ÷ num_dynamic
+	split_indices = Vector{Vector{CartesianIndex{N}}}(undef, num_dynamic)
+	for j = 1:num_dynamic
+		ind = Vector{CartesianIndex{N}}(undef, 0)
+		sizehint!(ind, min_indices_per_dynamic + (j > mod(length(indices), num_dynamic) ? 0 : 1))
+		split_indices[j] = ind
+	end
+	for i in eachindex(indices)
+		index = indices[i]
+		j = mod1(i, num_dynamic)
+		indices_of_dynamic = split_indices[j]
+		k = searchsortedfirst(indices_of_dynamic, index)
+		insert!(indices_of_dynamic, k, index)
+	end
+	return split_indices
+end
+
 """
 	For dynamic
 """
@@ -80,31 +96,6 @@ end
 
 
 
-"""
-	One vector for each dynamic
-"""
-function split_sampling(
-	indices::AbstractVector{<: CartesianIndex{N}},
-	num_dynamic::Integer
-) where N
-	min_indices_per_dynamic = length(indices) ÷ num_dynamic
-	split_indices = Vector{Vector{CartesianIndex{N}}}(undef, num_dynamic)
-	for j = 1:num_dynamic
-		ind = Vector{CartesianIndex{N}}(undef, 0)
-		sizehint!(ind, min_indices_per_dynamic + (j > mod(length(indices), num_dynamic) ? 0 : 1))
-		split_indices[j] = ind
-	end
-	linear_indices = LinearIndices(shape)
-	for i in eachindex(indices)
-		index = indices[i]
-		j = mod1(i, num_dynamic)
-		indices_of_dynamic = split_indices[j]
-		k = searchsortedfirst(indices_of_dynamic, index; by=(c::CartesianIndex{N} -> linear_indices[c]))
-		insert!(indices_of_dynamic, k, index)
-	end
-	return split_indices
-end
-
 function is_unique_sampling(indices::AbstractVector{<: CartesianIndex{N}}, num_dynamic::Integer) where N
 	split_indices = split_sampling(indices, num_dynamic)
 	for i = 1:num_dynamic
@@ -112,6 +103,73 @@ function is_unique_sampling(indices::AbstractVector{<: CartesianIndex{N}}, num_d
 		return false
 	end
 	return true
+end
+
+"""
+	TODO: is this useful?
+"""
+function find_duplicates(indices::AbstractVector{<: CartesianIndex{N}}, num_dynamic::Integer) where N
+	duplicates = Vector{Int}(undef, 0)
+	sizehint!(duplicates, length(indices) ÷ 2)
+	j = zero(CartesianIndex{N})
+	for i in eachindex(indices)
+		k = indices[i]
+		if j == k
+			push!(duplicates, i)
+		end
+		j = k
+	end
+	return duplicates
+end
+
+function swap_duplicates_dynamic!(indices::AbstractVector{CartesianIndex{N}}, num_dynamic::Integer; maxiter::Integer=0) where N
+	split_indices = split_sampling(indices, num_dynamic)
+	if maxiter == 0
+		maxiter = length(indices)
+	end
+	for i = 1:num_dynamic
+		indices_dynamic = split_indices[i]
+		k = zero(CartesianIndex{N})
+		j = 1
+		while j ≤ length(indices_dynamic)
+			m = indices_dynamic[j]
+			if k == m
+				iter = 1
+				found = false
+				while iter ≤ maxiter
+					iter += 1
+					i_swap = rand(1:num_dynamic)
+					i_swap == i && continue
+					indices_dynamic_swap = split_indices[i_swap]
+					j_swap = rand(1:length(indices_dynamic_swap))
+					k_swap = indices_dynamic_swap[j_swap]
+					l = searchsortedfirst(indices_dynamic, k_swap)
+					l_swap = searchsortedfirst(indices_dynamic_swap, k)
+					l ≤ length(indices_dynamic) && indices_dynamic[l] == k_swap && continue # Is k_swap already in indices_dynamic?
+					l_swap ≤ length(indices_dynamic_swap) && indices_dynamic_swap[l_swap] == k && continue # Is k already in indices_dynamic_swap?
+					# Swap
+					insert!(indices_dynamic, l, k_swap)
+					insert!(indices_dynamic_swap, l_swap, k)
+					deleteat!(indices_dynamic, (l > j) ? j : (j + 1))
+					deleteat!(indices_dynamic_swap, (l_swap > j_swap) ? j_swap : (j_swap + 1))
+					found = true
+					break
+				end
+				if !found
+					error("Not implemented, maybe do +- 1 search or reset to a default value, or do a hardcore search")
+				end
+			else
+				j += 1
+			end
+			k = m
+		end
+	end
+	# Flatten split indices
+	for i = 1:length(indices)
+		k, j = divrem(i-1, num_dynamic) .+ 1
+		indices[i] = split_indices[j][k]
+	end
+	return indices
 end
 
 
@@ -294,6 +352,8 @@ function plan_regular_undersampling_toeplitz()
 end
 =#
 
+
+
 """
 	Convert CartesianIndex to Int first using linear indices: LinearIndices(shape)[cartesian_indices]
 	Go through a, split indices into dynamics and if an index is already there,
@@ -369,8 +429,7 @@ function sparse2dense(
 	num_dynamic::Integer
 ) where N
 	@assert size(a, 3) == length(indices)
-	linear_indices = LinearIndices(shape)
-	perm = sortperm(indices; by=(k::CartesianIndex{N} -> linear_indices[k]))
+	perm = sortperm(indices)
 	b = zeros(eltype(a), size(a, 1), size(a, 2), shape..., num_dynamic)
 	# TODO: split indices, then iterate over that, also below
 	for i in eachindex(perm)
@@ -391,8 +450,7 @@ function sparse2dense_trunc(
 	num_dynamic::Integer
 ) where N
 	@assert size(a, 3) == length(indices)
-	linear_indices = LinearIndices(shape)
-	perm = sortperm(indices; by=(k::CartesianIndex{N} -> linear_indices[k]))
+	perm = sortperm(indices)
 	offset = CartesianIndex(ntuple(d -> roi[d][1] - 1, N))
 	b = zeros(eltype(a), size(a, 1), size(a, 2), roi_shape..., num_dynamic)
 	for i in eachindex(perm)

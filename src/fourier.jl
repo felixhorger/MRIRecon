@@ -91,7 +91,7 @@ function plan_fourier_transform(
 	dtype::Type{T}=ComplexF64,
 	Fx::AbstractVector{<: T}=empty(Vector{dtype}),
 	FHy::AbstractVector{<: T}=empty(Vector{dtype}),
-	eps::Real=1e-8,
+	eps::Real=1e-12,
 	upsampling=2,
 	kwargs...
 ) where T <: Complex
@@ -334,7 +334,7 @@ function plan_toeplitz(
 	weights::AbstractVector{<: Number};
 	dtype::Type{T}=ComplexF64,
 	padded::AbstractArray{<: T, 3}=empty(Array{T, 3}),
-	eps::Real=1e-8,
+	eps::Real=1e-12,
 	upsampling::Integer=2,
 	finufft_kwargs::Dict=Dict(),
 	fftw_flags=FFTW.MEASURE
@@ -361,7 +361,7 @@ function plan_toeplitz!(
 	shape::NTuple{3, Integer}; # (spatial 1, spatial 2, other)
 	dtype::Type{T}=ComplexF64,
 	padded::AbstractArray{<: T, 3}=empty(Array{T, 3}),
-	eps::Real=1e-8,
+	eps::Real=1e-12,
 	upsampling::Integer=2,
 	finufft_kwargs::Dict=Dict(),
 	fftw_flags=FFTW.MEASURE

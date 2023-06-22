@@ -219,7 +219,7 @@ function apply_channel_compression(
 	num_channels, num_spatial = size(kspace)
 	num_virtual_channels = size(C, 1)
 	@assert size(C, 2) == num_channels
-	compressed_kspace = zeros(T, num_virtual_channels, num_spatial)
+	compressed_kspace = Matrix{T}(undef, num_virtual_channels, num_spatial)
 	mul!(compressed_kspace, C, kspace)
 	return compressed_kspace
 end

@@ -452,7 +452,7 @@ function apply_window!(
 			a[k] *= windows[d][k[d]]
 		end
 	end
-	return
+	return a
 end
 
 function direct_unnormalised_sensitivities(

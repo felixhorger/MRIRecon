@@ -93,7 +93,7 @@ function compute_psf(
 	if fftshifted
 		centre = ntuple(_ -> 1, Val(N))
 	else
-		centre = shape .÷ 2
+		centre = shape .÷ 2 .+ 1
 	end
 	psf = Array{ComplexF64, N+2}(undef, (fov_scale .* shape)..., num_dynamic, num_dynamic) # out in
 	δ = zeros(ComplexF64, prod(shape) * num_dynamic)

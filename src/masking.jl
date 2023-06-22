@@ -2,6 +2,7 @@
 
 """
 	dense sampling mask
+	TODO: remove the leading one-element dim. It's annoying
 """
 function sampling_mask(
 	indices::AbstractVector{<: CartesianIndex{N}},
@@ -57,23 +58,78 @@ end
 """
 function split_sampling(
 	indices::AbstractVector{<: CartesianIndex{N}},
-	num_dynamic::Integer
+	num_dynamic::Integer;
+	do_sort::Bool=true
 ) where N
-	min_indices_per_dynamic = length(indices) ÷ num_dynamic
+	min_indices_per_dynamic = length(indices) ÷ num_dynamic # TODO: rename remove min
 	split_indices = Vector{Vector{CartesianIndex{N}}}(undef, num_dynamic)
 	for j = 1:num_dynamic
 		ind = Vector{CartesianIndex{N}}(undef, 0)
 		sizehint!(ind, min_indices_per_dynamic + (j > mod(length(indices), num_dynamic) ? 0 : 1))
 		split_indices[j] = ind
 	end
-	for i in eachindex(indices)
-		index = indices[i]
-		j = mod1(i, num_dynamic)
-		indices_of_dynamic = split_indices[j]
-		k = searchsortedfirst(indices_of_dynamic, index)
-		insert!(indices_of_dynamic, k, index)
+	if do_sort
+		for i in eachindex(indices)
+			index = indices[i]
+			j = mod1(i, num_dynamic)
+			indices_of_dynamic = split_indices[j]
+			k = searchsortedfirst(indices_of_dynamic, index)
+			insert!(indices_of_dynamic, k, index)
+		end
+	else # TODO: this isn't nice coding
+		for i in eachindex(indices)
+			index = indices[i]
+			j = mod1(i, num_dynamic)
+			indices_of_dynamic = split_indices[j]
+			push!(indices_of_dynamic, index)
+		end
 	end
 	return split_indices
+end
+
+function split_sampling_spatially(
+	indices::AbstractVector{<: CartesianIndex{N}},
+	shape::NTuple{N, Integer},
+	num_dynamic::Integer
+) where N
+	split_indices_spatially = [Vector{Int}(undef, 0) for _ in CartesianIndices(shape)]
+	for i in eachindex(indices)
+		j = mod1(i, num_dynamic)
+		I = indices[i]
+		#k = searchsortedfirst(split_indices_spatially[I], j)
+		#insert!(split_indices_spatially[I], k, j)
+		push!(split_indices_spatially[I], j)
+	end
+	return split_indices_spatially
+end
+function split_sampling(split_indices_spatially::AbstractArray{<: AbstractVector{<: Integer}, N}, num_dynamic::Integer) where N
+	split_indices = [Vector{CartesianIndex{N}}(undef, 0) for _ = 1:num_dynamic]
+	for I in CartesianIndices(split_indices_spatially)
+		for t in split_indices_spatially[I]
+			push!(split_indices[t], I)
+		end
+	end
+	return split_indices
+end
+
+"""
+"""
+function in_chronological_order(split_indices::AbstractVector{<: AbstractVector{<: CartesianIndex{N}}}) where N
+	indices = Vector{CartesianIndex{N}}(undef, sum(length.(split_indices)))
+	num_dynamic = length(split_indices)
+	for i in eachindex(indices)
+		k, j = divrem(i-1, num_dynamic) .+ 1
+		indices[i] = split_indices[j][k]
+	end
+	return indices
+end
+function in_chronological_order(
+	split_indices_spatially::AbstractArray{<: AbstractVector{<: Integer}, N},
+	num_dynamic::Integer
+) where N
+	return in_chronological_order(
+		split_sampling(split_indices_spatially, num_dynamic)
+	)
 end
 
 """
@@ -121,57 +177,6 @@ function find_duplicates(indices::AbstractVector{<: CartesianIndex{N}}, num_dyna
 	end
 	return duplicates
 end
-
-function swap_duplicates_dynamic!(indices::AbstractVector{CartesianIndex{N}}, num_dynamic::Integer; maxiter::Integer=0) where N
-	split_indices = split_sampling(indices, num_dynamic)
-	if maxiter == 0
-		maxiter = length(indices)
-	end
-	for i = 1:num_dynamic
-		indices_dynamic = split_indices[i]
-		k = zero(CartesianIndex{N})
-		j = 1
-		while j ≤ length(indices_dynamic)
-			m = indices_dynamic[j]
-			if k == m
-				iter = 1
-				found = false
-				while iter ≤ maxiter
-					iter += 1
-					i_swap = rand(1:num_dynamic)
-					i_swap == i && continue
-					indices_dynamic_swap = split_indices[i_swap]
-					j_swap = rand(1:length(indices_dynamic_swap))
-					k_swap = indices_dynamic_swap[j_swap]
-					l = searchsortedfirst(indices_dynamic, k_swap)
-					l_swap = searchsortedfirst(indices_dynamic_swap, k)
-					l ≤ length(indices_dynamic) && indices_dynamic[l] == k_swap && continue # Is k_swap already in indices_dynamic?
-					l_swap ≤ length(indices_dynamic_swap) && indices_dynamic_swap[l_swap] == k && continue # Is k already in indices_dynamic_swap?
-					# Swap
-					insert!(indices_dynamic, l, k_swap)
-					insert!(indices_dynamic_swap, l_swap, k)
-					deleteat!(indices_dynamic, (l > j) ? j : (j + 1))
-					deleteat!(indices_dynamic_swap, (l_swap > j_swap) ? j_swap : (j_swap + 1))
-					found = true
-					break
-				end
-				if !found
-					error("Not implemented, maybe do +- 1 search or reset to a default value, or do a hardcore search")
-				end
-			else
-				j += 1
-			end
-			k = m
-		end
-	end
-	# Flatten split indices
-	for i = 1:length(indices)
-		k, j = divrem(i-1, num_dynamic) .+ 1
-		indices[i] = split_indices[j][k]
-	end
-	return indices
-end
-
 
 """
 	a[spatial dims..., channels, dynamic]

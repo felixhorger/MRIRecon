@@ -13,6 +13,20 @@ import MRIRecon
 import MRITrajectories
 
 
+# Split sampling
+num_time = 499
+shape = (240, 240)
+sampling = [CartesianIndex((mod1(rand(Int), shape[i]) for i = 1:2)...) for _ = 1:100_000]
+split_sampling = MRIRecon.split_sampling(sampling, num_time)
+
+split_sampling_spatially = MRIRecon.split_sampling_spatially(MRIRecon.in_chronological_order(sampling, num_time), shape, num_time)
+
+split_sampling_2 = MRIRecon.split_sampling(split_sampling_spatially, num_time)
+for t = 1:num_time
+	@assert all(split_sampling[t] .== split_sampling_2[t])
+end
+
+
 # Partial Fourier
 shape = (95, 128)
 upsampling = (2, 2)

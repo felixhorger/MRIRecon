@@ -46,6 +46,7 @@ function plan_fourier_transform!(
 ) where {N, T <: Complex}
 
 	# Plan FFTs
+	# TODO: only use actual array, also other functions!
 	if haskey(kwargs, :flags) && kwargs[:flags] in (FFTW.MEASURE, FFTW.PATIENT)
 		z = Array{T, N}(undef, shape)
 	else
@@ -530,6 +531,8 @@ function upsample!(
 	return interpolated
 end
 """
+		upsample(a::AbstractArray{<: Number, N}, outshape::NTuple{M, Integer}) where {N, M}
+
 	Sinc interpolation upsampling, in the first M axes
 
 	Note, this "shifts" the origin of the volume by half an index in the upsampled space!

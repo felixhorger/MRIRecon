@@ -1,11 +1,10 @@
 
 function grappa_neighbours(kernelsize::NTuple{N, Integer}, acceleration::NTuple{N, Integer}) where N
 	reduced_size = kernelsize .÷ acceleration .+ mod.(kernelsize, acceleration)
-	Tuple(
+	return Tuple(
 		CartesianIndex((Tuple(I) .- 1) .* acceleration .+ 1)
 		for (i, I) in enumerate(CartesianIndices(reduced_size))
 	)
-	return indices
 end
 
 function grappa_kernel(calibration::AbstractArray{T, N}, targets::Tuple{Vararg{CartesianIndex{D}}}, neighbours::Tuple{Vararg{CartesianIndex{D}}}, kernelsize::NTuple{D, Integer}) where {T<:Number, N, D}

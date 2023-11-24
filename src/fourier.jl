@@ -5,9 +5,11 @@
 	Best practice: x[spatial dimensions..., other dimensions...]
 	If the user decides to mix spatial and other dimensions, good luck!
 	Pay attention that they have to be applied in pairs! Otherwise scaling
+	TODO: problem if F' F is applied, because F writes into y, and F' too.
+	However, F' F = I, so why bother?
 """
 function plan_fourier_transform(
-	y::AbstractArray{<: T, N},
+	y::AbstractArray{<: T, N}, # TODO: make this argument analogous to the other operators
 	dims::Union{Integer, NTuple{M, Integer} where M, AbstractVector{<: Integer}};
 	kwargs...
 ) where {T <: Complex, N}
@@ -74,36 +76,32 @@ end
 
 # TODO: unified concept for putting the shape first for all plan_...() functions
 
-function fourier_transform_size(num_frequencies::Integer, shape::NTuple{3, Integer})
-	spatial_length = shape[1] * shape[2]
-	other_dims = shape[3]
+function fourier_transform_size(num_frequencies::Integer, shape::NTuple{D, Integer}) where D
+	spatial_length = prod(shape[1:D-1])
+	other_dims = shape[D]
 	num_in = spatial_length * other_dims
 	num_out = num_frequencies * other_dims
 	return (num_out, num_in)
 end
 
-"""
-	Not side effect free
-"""
+
 function plan_fourier_transform(
-	k1::Vector{<: Number},
-	k2::Vector{<: Number},
-	shape::NTuple{3, Integer};
+	k::Matrix{<: Number}, # ndims x num_frequencies
+	shape::NTuple{D, Integer};
 	dtype::Type{T}=ComplexF64,
 	Fx::AbstractVector{<: T}=empty(Vector{dtype}),
 	FHy::AbstractVector{<: T}=empty(Vector{dtype}),
 	eps::Real=1e-12,
 	upsampling=2,
+	nthreads::Integer=Threads.nthreads(),
 	kwargs...
-) where T <: Complex
+) where {D, T <: Complex}
 
-	# Dimensions
-	num_frequencies = length(k1)
-	@assert length(k2) == num_frequencies
+	@assert size(k, 1) ∈ (1, 2, 3)
+	num_frequencies = size(k, 2)
 	num_out, num_in = fourier_transform_size(num_frequencies, shape)
-	num_frequencies = length(k1)
-	spatial_dims = [shape[1], shape[2]]
-	other_dims = shape[3]
+	spatial_dims = [shape[1:D-1]...]
+	other_dims = shape[D]
 
 	# Allocate output
 	Fx = check_allocate(Fx, num_out)
@@ -118,6 +116,7 @@ function plan_fourier_transform(
 		eps; # eps
 		dtype=real(T),
 		upsampfac=upsampling,
+		nthreads,
 		kwargs...
 	)
 	backward_plan = finufft_makeplan(
@@ -128,6 +127,7 @@ function plan_fourier_transform(
 		eps; # eps
 		dtype=real(T),
 		upsampfac=upsampling,
+		nthreads,
 		kwargs...
 	)
 	for plan in (forward_plan, backward_plan)
@@ -139,8 +139,9 @@ function plan_fourier_transform(
 		end
 	end
 	normalisation = 1 / prod(spatial_dims)
-	finufft_setpts!(forward_plan, k1, k2)
-	finufft_setpts!(backward_plan, k1, k2)
+	k_split = collect.(eachrow(k))
+	finufft_setpts!(forward_plan, k_split...)
+	finufft_setpts!(backward_plan, k_split...)
 
 	# Linear operators
 	F = LinearOperator{T}(
@@ -152,9 +153,7 @@ function plan_fourier_transform(
 		adj = (x, y) -> begin
 			finufft_exec!(backward_plan, reshape(y, num_frequencies, other_dims), reshape(x, shape))
 			xd = decomplexify(x)
-			@tturbo for i in 1:length(xd)
-				xd[i] *= normalisation
-			end
+			turbo_multiply!(xd, normalisation; num_threads=Val(nthreads))
 			x
 		end,
 		out=Fx,
@@ -599,6 +598,7 @@ for (func, op) in ( (:fftshift, :(.+)), (:ifftshift, :(.-)) )
 end
 
 
+# TODO: really need vector of unsampled indices? Not entirely sure which cases make sense here
 """
 kspace[fully sampled and disentangled dims or other (e.g. channels), partially sampled spatial dims...]
 """

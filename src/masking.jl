@@ -1,4 +1,4 @@
-# TODO: rename sampling
+# TODO: rename sampling?
 
 """
 	dense sampling mask
@@ -360,6 +360,7 @@ end
 
 
 """
+	Use this if each k-space sample is acquired n times, where n > 1 and doesn't depend on k
 	Convert CartesianIndex to Int first using linear indices: LinearIndices(shape)[cartesian_indices]
 	Go through a, split indices into dynamics and if an index is already there,
 	then add that k-space value to the one already registered and put zero into the duplicate.
@@ -419,6 +420,7 @@ end
 
 
 
+# TODO provide output type, maybe as sparse2dense{T}() if that's possible, think I saw that somewhere
 """
 	For kspace data
 	readout direction and channels must be first axes of a
@@ -431,15 +433,17 @@ function sparse2dense(
 	a::AbstractArray{<: Number, 3},
 	indices::AbstractVector{<: CartesianIndex{N}},
 	shape::NTuple{N, Integer},
-	num_dynamic::Integer
+	num_dynamic::Integer;
+	t0::Integer=1
 ) where N
 	@assert size(a, 3) == length(indices)
 	perm = sortperm(indices)
 	b = zeros(eltype(a), size(a, 1), size(a, 2), shape..., num_dynamic)
 	# TODO: split indices, then iterate over that, also below
+	t0 -= 1
 	for i in eachindex(perm)
 		j = perm[i]
-		dynamic = mod1(j, num_dynamic)
+		dynamic = mod1(j + t0, num_dynamic)
 		k = indices[j]
 		@views b[:, :, k, dynamic] .+= a[:, :, j]
 	end

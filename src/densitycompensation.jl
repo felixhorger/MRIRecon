@@ -41,23 +41,49 @@ end
 
 
 function generate_neighbour_pairs(chunks::NTuple{N, Integer}) where N
+	@assert all(chunks .> 2)
 	num_pairs = (3^N - 1) * prod(chunks) #prod((c-1) * 2 + 1 for c in chunks) # Empirical formula
 	neighbour_pairs = Vector{NTuple{2, CartesianIndex{N}}}(undef, 0)
 	sizehint!(neighbour_pairs, num_pairs)
-	neighbours = [CartesianIndices(ntuple(i -> 2, N))..., CartesianIndex(0, 2)]
-	i = 1
+	@show neighbours = [
+		one(CartesianIndex{N}),
+		CartesianIndex(2, ntuple(i -> 1, N-1)...),
+		(
+			CartesianIndex((Tuple(I) .- 1)..., 2, ntuple(i -> 1, N-d)...)
+			for d = 2:N
+			for I in CartesianIndices(ntuple(i -> 3, d-1))
+		)...
+	]
 	for I in CartesianIndices(chunks)
 		for J in neighbours
 			K = I + J
-			#!all(1 .≤ Tuple(K) .≤ chunks) && continue
+			# Not needed because periodic boundaries: !all(1 .≤ Tuple(K) .≤ chunks) && continue
 			K = CartesianIndex(mod1.(Tuple(K) .- 1, chunks))
-			#neighbour_pairs[i] = (I, K)
 			push!(neighbour_pairs, (I, K))
-			#i += 1
 		end
 	end
 	return neighbour_pairs
 end
+
+
+function chunked_convolution_size(
+	grid::AbstractArray{<: AbstractVector{<: Integer}, N},
+	neighbour_pairs::Vector{<: NTuple{2, CartesianIndex{N}}}
+) where N
+	len = 0
+	for (p, (p1, p2)) in enumerate(neighbour_pairs)
+		i = grid[p1]
+		j = grid[p2]
+		len += length(i) * length(j)
+	end
+	num = 0
+	for i in grid
+		num += length(i)
+	end
+	return len, num
+end
+
+#function testunique(a::Vector{NTuple{2, CartesianIndex{N}}}) where N  hallo hallo                                                                                         for i in eachindex(a)                                                                                                                                         for j = i+1:length(a)                                                                                                                                         if (a[i][1] == a[j][1] && a[i][2] == a[j][2]) || (a[i][1] == a[j][2] && a[i][2] == a[j][1])                                                                   error()                                                                                                                                                       end                                                                                                                                                           end                                                                                                                                                           end                                                                                                                                                           end
 
 
 function compute_chunked_convolution(
@@ -69,31 +95,35 @@ function compute_chunked_convolution(
 	neighbour_pairs::Vector{<: NTuple{2, CartesianIndex{N}}}
 ) where N
 	convolution = Vector{Matrix{Float64}}(undef, length(neighbour_pairs))
-	Δ = Vector{Float64}(undef, N)
-	for (p, (p1, p2)) in enumerate(neighbour_pairs)
+	Δ = Matrix{Float64}(undef, N, Threads.nthreads())
+	for p in eachindex(neighbour_pairs) # Can't use enumerate because doesn't work with @threads
+		p1, p2 = neighbour_pairs[p]
 		i = grid[p1]
 		j = grid[p2]
 		c = Matrix{Float64}(undef, length(i), length(j))
-		@views for n in axes(c, 2), m in axes(c, 1)
+		@views @inbounds Threads.@threads for I in CartesianIndices(c) # n in axes(c, 2), m in axes(c, 1)
+			Δthr = Δ[:, Threads.threadid()]
+			m, n = Tuple(I)
 			ii = i[m]
 			jj = j[n]
 			# Take care of "periodic" distance
 			for d = 1:N
 				δ = abs(samples[d, ii] - samples[d, jj])
-				if δ > π/2 
+				if δ > π/2
 					δ -= π/2
 				end
-				Δ[d] = δ
+				Δthr[d] = δ
 			end
-			@. Δ = (shape * Δ)^2
-			kr = sqrt(sum(Δ))
-			if kr > kernel_radius
+			@. Δthr = (shape * Δthr)^2
+			kr = sqrt(sum(Δthr))
+			@inbounds if kr > kernel_radius
 				c[m, n] = 0
 			else
 				c[m, n] = kernel(kr)
 			end
 		end
-		convolution[p] = c
+		@inbounds convolution[p] = c
+		GC.safepoint()
 	end
 	return convolution
 end
@@ -193,6 +223,10 @@ function plan_chunked_convolution(
 	efficient_grid, maxlength = prepare_efficient_grid(grid)
 
 	neighbour_pairs = generate_neighbour_pairs(chunks)
+
+	@show chunked_convolution_size(grid, neighbour_pairs)
+	error()
+
 	convolution = compute_chunked_convolution(kernel, kernel_radius, shape, samples, grid, neighbour_pairs)
 	tmp = Vector{T}(undef, maxlength)
 
@@ -217,11 +251,14 @@ function plan_chunked_convolution(
 end
 
 
+# TODO: evaluate kernel prior to computing the convolution, then linearly interpolate
+# k goes from -pi to pi here
+# r is the FOV in indices because δx = 2π / Δk = 2π / 2π = 1
 function pipe_kernel(kr::Real, N::Integer)
 	if kr != 0
-		return besselj(N/2, kr/2)^2 / kr^N
+		return besselj(0.5N, 0.5kr)^2 / kr^N # TODO: outsource the 0.5 in front of kr? makes code more complicated but could save time, how much?
 	else
-		return 0.25^N / SpecialFunctions.gamma(1 + N/2)^2
+		return 0.25^N / SpecialFunctions.gamma(1 + 0.5N)^2
 	end
 end
 
@@ -255,7 +292,7 @@ function pipe_density_correction(
 
 	kernel(kr) = pipe_kernel(kr, N)
 
-	@show kernel_radius = 2 * besselj_zero(1, kernel_zeros)
+	@show kernel_radius = 2 * besselj_zero(1, kernel_zeros) # Times two because we use *0.5 in the kernel argument, and this is for k ∈ [-π, π] and r = shape
 	@show kernel_norm = kernel_integral(kernel, N, kernel_radius)
 
 	@show chunks = ceil.(Int, 2π .* shape ./ kernel_radius)
@@ -275,6 +312,7 @@ function pipe_density_correction(
 	iter = 0
 	err = Inf
 	while (err > tol && iter < maxiter)
+		@show iter
 		mul!(density, C, weights)
 		#TODO uncomment: any(iszero, density) && error("density estimate produced zero")
 		weights ./= density

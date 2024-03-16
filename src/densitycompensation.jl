@@ -2,6 +2,8 @@ import FunctionZeros: besselj_zero
 using Bessels
 import SpecialFunctions
 using QuadGK
+using SparseArrays
+using MKLSparse
 # TODO: use import only, not using. Or, can do import ...: fct()
 
 function kernel_integral(kernel::Function, N::Integer, limit::Real)
@@ -45,7 +47,7 @@ function generate_neighbour_pairs(chunks::NTuple{N, Integer}) where N
 	num_pairs = (3^N - 1) * prod(chunks) #prod((c-1) * 2 + 1 for c in chunks) # Empirical formula
 	neighbour_pairs = Vector{NTuple{2, CartesianIndex{N}}}(undef, 0)
 	sizehint!(neighbour_pairs, num_pairs)
-	@show neighbours = [
+	neighbours = [
 		one(CartesianIndex{N}),
 		CartesianIndex(2, ntuple(i -> 1, N-1)...),
 		(
@@ -65,6 +67,17 @@ function generate_neighbour_pairs(chunks::NTuple{N, Integer}) where N
 	return neighbour_pairs
 end
 
+function testunique(a::Vector{NTuple{2, CartesianIndex{N}}}) where N
+	for i in eachindex(a)
+		for j = i+1:length(a)
+			if (a[i][1] == a[j][1] && a[i][2] == a[j][2]) || (a[i][1] == a[j][2] && a[i][2] == a[j][1])
+				error()
+			end 
+		end 
+	end 
+end
+
+
 
 function chunked_convolution_size(
 	grid::AbstractArray{<: AbstractVector{<: Integer}, N},
@@ -83,8 +96,45 @@ function chunked_convolution_size(
 	return len, num
 end
 
-#function testunique(a::Vector{NTuple{2, CartesianIndex{N}}}) where N  hallo hallo                                                                                         for i in eachindex(a)                                                                                                                                         for j = i+1:length(a)                                                                                                                                         if (a[i][1] == a[j][1] && a[i][2] == a[j][2]) || (a[i][1] == a[j][2] && a[i][2] == a[j][1])                                                                   error()                                                                                                                                                       end                                                                                                                                                           end                                                                                                                                                           end                                                                                                                                                           end
 
+function chunked_convolution_worker(
+	kernel::Function,
+	kernel_radius::Real,
+	samples::AbstractMatrix{<: Real},
+	shape::NTuple{N, Integer},
+	neighbour_idx::Channel{NTuple{2, Int}},
+	It::AbstractChannel{<: AbstractVector{<: Integer}},
+	Jt::AbstractChannel{<: AbstractVector{<: Integer}},
+	Vt::AbstractChannel{<: AbstractVector{<: Real}}
+) where N
+	I = Vector{Int}(undef, 0)
+	J = Vector{Int}(undef, 0)
+	V = Vector{Float64}(undef, 0)
+	#sizehint!.((I, J, V), st) # TODO
+	Δ = Vector{Float64}(undef, N)
+	while true
+		ii, jj = take!(neighbour_idx)
+		ii == 0 && break # Nothing to be done anymore
+		# Take care of "periodic" distance
+		@inbounds for d = 1:N
+			δ = abs(samples[d, ii] - samples[d, jj])
+			if δ > π/2
+				δ -= π/2
+			end
+			Δ[d] = (shape[d] * δ)^2
+		end
+		kr = sqrt(sum(Δ))
+		if kr ≤ kernel_radius
+			push!(I, ii)
+			push!(J, jj)
+			push!(V, kernel(kr))
+		end
+	end
+	put!(It, I)
+	put!(Jt, J)
+	put!(Vt, V)
+	return
+end
 
 function compute_chunked_convolution(
 	kernel::Function,
@@ -94,37 +144,60 @@ function compute_chunked_convolution(
 	grid::AbstractArray{<: AbstractVector{<: Integer}, N},
 	neighbour_pairs::Vector{<: NTuple{2, CartesianIndex{N}}}
 ) where N
-	convolution = Vector{Matrix{Float64}}(undef, length(neighbour_pairs))
-	Δ = Matrix{Float64}(undef, N, Threads.nthreads())
-	for p in eachindex(neighbour_pairs) # Can't use enumerate because doesn't work with @threads
-		p1, p2 = neighbour_pairs[p]
-		i = grid[p1]
+	nthreads = Threads.nthreads()
+
+	s = size(samples, 2)
+	#@show st = floor(Int, 1e1 * s^2 / (sqrt(prod(size(grid))) * nthreads)) # TODO: this is wrong
+
+	neighbour_idx = Channel{NTuple{2, Int}}(1)
+	It = Channel{Vector{Int}}(nthreads)
+	Jt = Channel{Vector{Int}}(nthreads)
+	Vt = Channel{Vector{Float64}}(nthreads)
+
+	tasks = map(1:nthreads) do _
+		Threads.@spawn chunked_convolution_worker(
+			kernel, kernel_radius,
+			samples, shape,
+			neighbour_idx, It, Jt, Vt
+		)
+	end
+
+
+	# TODO: get rid of neighbour pairs, can generate that here?
+	@inbounds for (p, (p1, p2)) in enumerate(neighbour_pairs)
+		mod(p, 10000) == 0 && @show p / length(neighbour_pairs)
+
+		i = grid[p1] # TODO rename these and ii jj
 		j = grid[p2]
-		c = Matrix{Float64}(undef, length(i), length(j))
-		@views @inbounds Threads.@threads for I in CartesianIndices(c) # n in axes(c, 2), m in axes(c, 1)
-			Δthr = Δ[:, Threads.threadid()]
-			m, n = Tuple(I)
+		ij = length.((i, j))
+		any(iszero, ij) && continue 
+
+		for MN in CartesianIndices(ij)
+			m, n = Tuple(MN)
 			ii = i[m]
 			jj = j[n]
-			# Take care of "periodic" distance
-			for d = 1:N
-				δ = abs(samples[d, ii] - samples[d, jj])
-				if δ > π/2
-					δ -= π/2
-				end
-				Δthr[d] = δ
-			end
-			@. Δthr = (shape * Δthr)^2
-			kr = sqrt(sum(Δthr))
-			@inbounds if kr > kernel_radius
-				c[m, n] = 0
-			else
-				c[m, n] = kernel(kr)
-			end
+			ii > jj && continue
+			# The above skips the ones that would be double counted if chunk is convolved with itself,
+			# this also prevents that the lower triangle of the matrix will be filled
+			put!(neighbour_idx, (ii, jj))
 		end
-		@inbounds convolution[p] = c
-		GC.safepoint()
+		# TODO
+		#GC.safepoint()
 	end
+
+	foreach(i -> put!(neighbour_idx, (0, 0)), 1:nthreads)
+
+	#TODO: @show len = sum(length.(It))
+
+	I = vcat((take!(It) for _ = 1:nthreads)...)
+	J = vcat((take!(Jt) for _ = 1:nthreads)...)
+	V = vcat((take!(Vt) for _ = 1:nthreads)...)
+
+	convolution = Symmetric(UpperTriangular(sparse(I, J, V, s, s)))
+	#@show maximum(sparse(I, J, V, s, s, ((x, y) -> x))), maximum(convolution)
+
+	wait.(tasks)
+
 	return convolution
 end
 
@@ -152,21 +225,9 @@ function apply_chunked_convolution!(
 	x::AbstractVector{<: T},
 	grid::AbstractArray{<: NTuple{2, Integer}, N},
 	neighbour_pairs::Vector{<: NTuple{2, CartesianIndex{N}}},
-	convolution::AbstractVector{<: AbstractMatrix{<: Real}}
+	convolution::AbstractMatrix{<: T}
 ) where {T <: Real, N}
-	@views for (p, (p1, p2)) in enumerate(neighbour_pairs)
-		l1, u1 = grid[p1]
-		l2, u2 = grid[p2]
-		(l1 > u1 || l2 > u2) && continue
-		v1 = x[l1:u1]
-		v2 = x[l2:u2]
-		c = convolution[p]
-		mul!(tmp[1:size(c, 1)], c, v2)
-		y[l1:u1] .+= tmp[1:size(c, 1)]
-		p1 == p2 && continue
-		mul!(tmp[1:size(c, 2)], c', v1)
-		y[l2:u2] .+= tmp[1:size(c, 2)]
-	end
+	mul!(y, convolution, x)
 	return y
 end
 
@@ -224,8 +285,7 @@ function plan_chunked_convolution(
 
 	neighbour_pairs = generate_neighbour_pairs(chunks)
 
-	@show chunked_convolution_size(grid, neighbour_pairs)
-	error()
+	#@show chunked_convolution_size(grid, neighbour_pairs)
 
 	convolution = compute_chunked_convolution(kernel, kernel_radius, shape, samples, grid, neighbour_pairs)
 	tmp = Vector{T}(undef, maxlength)
@@ -247,7 +307,7 @@ function plan_chunked_convolution(
 		out=Vector{Float64}(undef, 0)
 	)
 
-	return C, P
+	return C, P, convolution
 end
 
 
@@ -297,7 +357,8 @@ function pipe_density_correction(
 
 	@show chunks = ceil.(Int, 2π .* shape ./ kernel_radius)
 
-	C, P = plan_chunked_convolution(kernel, kernel_radius, shape, samples, chunks)
+	C, P, convolution = plan_chunked_convolution(kernel, kernel_radius, shape, samples, chunks)
+	#return convolution
 
 	weights = Vector{Float64}(undef, size(C, 2))
 	density = Vector{Float64}(undef, size(C, 2))
@@ -314,7 +375,7 @@ function pipe_density_correction(
 	while (err > tol && iter < maxiter)
 		@show iter
 		mul!(density, C, weights)
-		#TODO uncomment: any(iszero, density) && error("density estimate produced zero")
+		any(iszero, density) && error("density estimate produced zero")
 		weights ./= density
 		err = sqrt(sum(abs2, density .- 1) ./ length(density))
 		iter += 1

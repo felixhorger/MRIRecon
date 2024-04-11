@@ -200,7 +200,7 @@ end
 end
 
 
-
+# TODO: overthink the "!"
 """
 	Linear operator to perform masking efficiently (in place, sparse mask)
 	
@@ -360,7 +360,7 @@ end
 
 
 """
-	Use this if each k-space sample is acquired n times, where n > 1 and doesn't depend on k
+	Use this if each k-space sample is acquired n times, where n > 1 and does depend on k
 	Convert CartesianIndex to Int first using linear indices: LinearIndices(shape)[cartesian_indices]
 	Go through a, split indices into dynamics and if an index is already there,
 	then add that k-space value to the one already registered and put zero into the duplicate.
@@ -421,13 +421,15 @@ end
 
 
 # TODO provide output type, maybe as sparse2dense{T}() if that's possible, think I saw that somewhere
+# TODO: on one hand, using .+ below means that if you fully sample you can use this to average.
+# On the other hand, this means that if you undersample and blindly use this function, you'll run into issues
+# if you sample the same point multiple times since the division by number of samples is missing.
+# What to do? Safe and sound seems like the best option? I changed it to this for now, to be determined
 """
 	For kspace data
 	readout direction and channels must be first axes of a
 	dynamic dimension is the last, assumed mod1(readout index, shape[N])
 	returns kspace[readout, spatial dims..., channels, dynamics]
-
-	if num_dynamic not given than that dim is dropped
 """
 function sparse2dense(
 	a::AbstractArray{<: Number, 3},
@@ -445,7 +447,7 @@ function sparse2dense(
 		j = perm[i]
 		dynamic = mod1(j + t0, num_dynamic)
 		k = indices[j]
-		@views b[:, :, k, dynamic] .+= a[:, :, j]
+		@views b[:, :, k, dynamic] .= a[:, :, j] # HERE TODO see above comments
 	end
 	return b
 end

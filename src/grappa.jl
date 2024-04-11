@@ -1,4 +1,5 @@
 
+# TODO: are readouts normally included? Disentangled?
 function grappa_neighbours(kernelsize::NTuple{N, Integer}, acceleration::NTuple{N, Integer}) where N
 	reduced_size = kernelsize .÷ acceleration .+ mod.(kernelsize, acceleration)
 	return Tuple(
@@ -7,7 +8,9 @@ function grappa_neighbours(kernelsize::NTuple{N, Integer}, acceleration::NTuple{
 	)
 end
 
+# TODO: is tuple or array here better?
 function grappa_kernel(calibration::AbstractArray{T, N}, targets::Tuple{Vararg{CartesianIndex{D}}}, neighbours::Tuple{Vararg{CartesianIndex{D}}}, kernelsize::NTuple{D, Integer}) where {T<:Number, N, D}
+	# TODO checks for shape and kernel size
 	num_channels = size(calibration, 1)
 	shape = size(calibration)[2:N]
 	# Get Hankel
@@ -23,7 +26,7 @@ function grappa_kernel(calibration::AbstractArray{T, N}, targets::Tuple{Vararg{C
 		# Multiple targets, need to construct Hankel matrix
 		calibration = MRIHankel.hankel_matrix(calibration, targets, kernelsize)
 		# This has size (num_channels * num_targets, number of instances of the kernel fitting into calibration)
-		@show size(calibration)
+		#@show size(calibration)
 	end
 	g = calibration * pinv(hankel)
 	g = reshape(g, num_channels, length(targets), num_channels, length(neighbours))
@@ -34,9 +37,10 @@ end
 
 
 
+# TODO: how to deal with cases where threading should be disabled, e.g. for MRF, parallelisation should happen along time not in k-space?
 """
 kspace needs to be zero where not sampled
-indices is where you want the kernel applied, location of the (1,1,...) corner
+indices is where you want the kernel applied, location of centre of kernel
 Wrap around is used, i.e. the kernel's "unit cell" must fit an integer number of times into the k-space
 """
 function apply_grappa_kernel!(
@@ -49,7 +53,7 @@ function apply_grappa_kernel!(
 ) where {C <: Complex, N, D, M}
 	@assert N > 1
 	@assert N == D + 1 # Channels
-	@assert N == M + 2 # Readout and channels
+	@assert N == M + 2 # Readout and channels TODO make proper error msg
 	@assert all(MRIHankel.check_kernelsize(i, kernelsize) for i in (targets, neighbours))
 
 	# Get dimensions
@@ -61,11 +65,12 @@ function apply_grappa_kernel!(
 	kspace_d = reinterpret(reshape, Float64, kspace)
 	g_d = reinterpret(reshape, Float64, g)
 
-	one_shift(I) = ntuple(i -> I[i] - one(CartesianIndex{D}), D)
+	one_shift(Is) = ntuple(i -> Is[i] - one(CartesianIndex{D}), length(Is))
 	targets, neighbours = one_shift.((targets, neighbours))
 	num_readout = shape[2]
 
 	wrap_index(I) = CartesianIndex(mod1.(Tuple(I), spatial_shape))
+	offset = CartesianIndex(kernelsize .÷ 2)
 	Threads.@threads for K_phase in indices
 		for l in eachindex(neighbours)
 			@inbounds L = neighbours[l]
@@ -73,15 +78,17 @@ function apply_grappa_kernel!(
 				@inbounds T = targets[t]
 				for k = 1:num_readout
 					K = CartesianIndex(k, Tuple(K_phase)...)
+					K = K - offset
 					X, Y = wrap_index.((K + L, K + T))
-					@turbo for c_in = 1:num_channels, c_out = 1:num_channels
+					#@turbo
+					for c_in = 1:num_channels, c_out = 1:num_channels
 						kspace_d[1, c_out, Y] += (
-								g_d[1, c_out, c_in, t, l] * kspace_d[1, c_in, X]
-							-	g_d[2, c_out, c_in, t, l] * kspace_d[2, c_in, X]
+							  g_d[1, c_out, c_in, t, l] * kspace_d[1, c_in, X]
+							- g_d[2, c_out, c_in, t, l] * kspace_d[2, c_in, X]
 						)
 						kspace_d[2, c_out, Y] += (
-								g_d[1, c_out, c_in, t, l] * kspace_d[2, c_in, X]
-							+	g_d[2, c_out, c_in, t, l] * kspace_d[1, c_in, X]
+							  g_d[1, c_out, c_in, t, l] * kspace_d[2, c_in, X]
+							+ g_d[2, c_out, c_in, t, l] * kspace_d[1, c_in, X]
 						)
 					end
 				end

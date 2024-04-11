@@ -52,7 +52,7 @@ shape = (128, phase_encoding_shape...)
 sensitivities = MRIPhantoms.coil_sensitivities(shape, (4, 2), 0.25)
 
 # Operators and sampling
-S, Sx = MRIRecon.plan_sensitivities(sensitivities, 1)
+S = MRIRecon.plan_sensitivities(sensitivities, 1)
 
 calibration_area = (32, 32, 32)
 calibration_indices = MRIRecon.centre_indices.(shape, calibration_area)
@@ -118,8 +118,8 @@ neighbours = (
 actual_kspace = ifftshift(kspace_orig, 1:3);
 g = MRIRecon.grappa_kernel(permutedims(actual_kspace, (4, 1, 2, 3))[:, calibration_indices...], targets, neighbours, kernelsize);
 
-centre = CartesianIndex(kernelsize[2:3] .÷ 2)
-indices = [I - centre for I in unsampled]
+centre = CartesianIndex(kernelsize[2:3] .÷ 2) # Not the centre of kernel, but the offset, centre is at .+ 1
+indices = [I - 0.0 .* centre for I in unsampled] # included the offset in grappa directly
 
 @time completed_kspace = MRIRecon.apply_grappa_kernel!(masked_kspace, g, targets, neighbours, kernelsize, indices);
 

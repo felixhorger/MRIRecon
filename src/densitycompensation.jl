@@ -16,7 +16,8 @@ end
 # Points outside shape will be clamped to nearest (Boston-distance) inside compartment
 function divide_into_chunks(
 	samples::AbstractMatrix{<: Real},
-	chunks::NTuple{N, Integer}
+	chunks::NTuple{N, Integer},
+	offset::Real
 ) where N
 	@assert size(samples, 1) == N
 
@@ -32,68 +33,13 @@ function divide_into_chunks(
 
 	for s in axes(samples, 2)
 		@views i = clamp.(
-			floor.(Int, (Tuple(samples[:, s]) .+ π) ./ chunksize) .+ 1,
+			floor.(Int, (Tuple(samples[:, s]) .+ π) ./ chunksize .+ (1 + offset)),
 			1, chunks
 		)
 		push!(grid[i...], s)
 	end
 
 	return grid
-end
-
-
-function generate_neighbour_pairs(chunks::NTuple{N, Integer}) where N
-	@assert all(chunks .> 2)
-	num_pairs = (3^N - 1) * prod(chunks) #prod((c-1) * 2 + 1 for c in chunks) # Empirical formula
-	neighbour_pairs = Vector{NTuple{2, CartesianIndex{N}}}(undef, 0)
-	sizehint!(neighbour_pairs, num_pairs)
-	neighbours = [
-		one(CartesianIndex{N}),
-		CartesianIndex(2, ntuple(i -> 1, N-1)...),
-		(
-			CartesianIndex((Tuple(I) .- 1)..., 2, ntuple(i -> 1, N-d)...)
-			for d = 2:N
-			for I in CartesianIndices(ntuple(i -> 3, d-1))
-		)...
-	]
-	for I in CartesianIndices(chunks)
-		for J in neighbours
-			K = I + J
-			# Not needed because periodic boundaries: !all(1 .≤ Tuple(K) .≤ chunks) && continue
-			K = CartesianIndex(mod1.(Tuple(K) .- 1, chunks))
-			push!(neighbour_pairs, (I, K))
-		end
-	end
-	return neighbour_pairs
-end
-
-function testunique(a::Vector{NTuple{2, CartesianIndex{N}}}) where N
-	for i in eachindex(a)
-		for j = i+1:length(a)
-			if (a[i][1] == a[j][1] && a[i][2] == a[j][2]) || (a[i][1] == a[j][2] && a[i][2] == a[j][1])
-				error()
-			end 
-		end 
-	end 
-end
-
-
-
-function chunked_convolution_size(
-	grid::AbstractArray{<: AbstractVector{<: Integer}, N},
-	neighbour_pairs::Vector{<: NTuple{2, CartesianIndex{N}}}
-) where N
-	len = 0
-	for (p, (p1, p2)) in enumerate(neighbour_pairs)
-		i = grid[p1]
-		j = grid[p2]
-		len += length(i) * length(j)
-	end
-	num = 0
-	for i in grid
-		num += length(i)
-	end
-	return len, num
 end
 
 
@@ -279,22 +225,25 @@ function plan_chunked_convolution(
 	# dis: harder to access only first dimension, need to use array comprehension.
 	# To check what's best, need to collect more examples from all the code
 
-	grid = divide_into_chunks(samples, chunks)
+	grid         = divide_into_chunks(samples, chunks, ntuple(_ -> 0.0, N))
+	shifted_grid = divide_into_chunks(samples, chunks, ntuple(_ -> 0.5, N))
 
 	efficient_grid, maxlength = prepare_efficient_grid(grid)
 
-	neighbour_pairs = generate_neighbour_pairs(chunks)
-
 	#@show chunked_convolution_size(grid, neighbour_pairs)
 
-	convolution = compute_chunked_convolution(kernel, kernel_radius, shape, samples, grid, neighbour_pairs)
+	convolution = compute_chunked_convolution(
+		kernel, kernel_radius,
+		shape, samples,
+		efficient_grid, shifted_grid
+	)
 	tmp = Vector{T}(undef, maxlength)
 
 	C = HermitianOperator{Float64}(
 		size(samples, 2),
 		(y, x) -> begin
 			turbo_wipe!(y)
-			apply_chunked_convolution!(tmp, y, x, efficient_grid, neighbour_pairs, convolution)
+			apply_chunked_convolution!(tmp, y, x, grid, neighbour_pairs, convolution)
 			y
 		end;
 		out=Vector{Float64}(undef, 0)

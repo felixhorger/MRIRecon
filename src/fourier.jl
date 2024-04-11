@@ -305,7 +305,8 @@ function prepare_toeplitz(
 	eps::Real,
 	upsampling::Integer,
 	finufft_kwargs::Dict,
-	fftw_flags
+	fftw_flags;
+	inverse::Bool=false
 ) where T <: Complex
 	@assert length(k1) == length(k2) == length(weights)
 	upsampled_shape = toeplitz_padded_size(shape, upsampling)
@@ -321,6 +322,9 @@ function prepare_toeplitz(
 		upsampfac=upsampling,
 		finufft_kwargs...
 	)
+	if inverse
+		@. q = 1 / q
+	end
 	# Plan convolution operator
 	C = plan_periodic_convolution!(upsampled_shape, dropdims(q; dims=3); flags=fftw_flags)
 	# Preallocate output (if necessary)
@@ -337,11 +341,12 @@ function plan_toeplitz(
 	eps::Real=1e-12,
 	upsampling::Integer=2,
 	finufft_kwargs::Dict=Dict(),
-	fftw_flags=FFTW.MEASURE
+	fftw_flags=FFTW.MEASURE,
+	inverse::Bool=false
 ) where T <: Complex
 	shape = size(y)
 	# Prepare convolution and padded array
-	C, padded = prepare_toeplitz(padded, k1, k2, weights, shape, dtype, eps, upsampling, finufft_kwargs, fftw_flags)
+	C, padded = prepare_toeplitz(padded, k1, k2, weights, shape, dtype, eps, upsampling, finufft_kwargs, fftw_flags; inverse)
 	# Toeplitz Embedding operator
 	FHMF = HermitianOperator{T}(
 		prod(shape),
@@ -364,10 +369,11 @@ function plan_toeplitz!(
 	eps::Real=1e-12,
 	upsampling::Integer=2,
 	finufft_kwargs::Dict=Dict(),
-	fftw_flags=FFTW.MEASURE
+	fftw_flags=FFTW.MEASURE,
+	inverse::Bool=false
 ) where T <: Complex
 	# Prepare padded array and convolution
-	C, padded = prepare_toeplitz(padded, k1, k2, weights, shape, dtype, eps, upsampling, finufft_kwargs, fftw_flags)
+	C, padded = prepare_toeplitz(padded, k1, k2, weights, shape, dtype, eps, upsampling, finufft_kwargs, fftw_flags; inverse)
 	# Toeplitz Embedding
 	FHMF = HermitianOperator{T}(
 		prod(shape),
@@ -449,10 +455,7 @@ function shift_half_fov!(kspace::AbstractArray{<: Number, N}, dims) where N
 end
 
 
-function shift_fov!(kspace::AbstractArray{<: Number}, shift::AbstractVector{<: Real})
-	shift_fov!(kspace, Tuple(shift)) # Calling it that way might pay off because then the callee can be compiled
-	# for that dimension
-end
+shift_fov!(kspace::AbstractArray{<: Number}, shift::AbstractVector{<: Real}) = shift_fov!(kspace, Tuple(shift))
 function shift_fov!(
 	kspace::AbstractArray{<: Number, N},
 	shift::NTuple{D, Real}
@@ -503,6 +506,7 @@ function downsample(a::AbstractArray{T, N}, downsampling::NTuple{M, Integer}) wh
 	return interpolated
 end
 
+# TODO: why the hell did I put '!' here?
 function upsample!(
 	a::AbstractArray{T, N},
 	shape::NTuple{M, Integer},

@@ -15,11 +15,12 @@ module MRIRecon
 	using MRIHankel
 	import DSP
 
-	include("fourier.jl")
 	include("masking.jl")
+	include("fourier.jl")
+	include("densitycompensation.jl")
 	include("coil_combination.jl")
-	include("sense.jl")
 	include("sensitivity_estimation.jl")
+	include("sense.jl")
 	include("grappa.jl")
 	include("utils.jl")
 

@@ -2,6 +2,7 @@
 # Uecker2017 ESPIRIT+Virtual Conjugate Coils
 # Iyer2020 Sure based parameter estimation for ESPIRIT
 # Ilicak2020 Automated parameter selection for accelerated MRI ...
+# TODO: outsource this?
 
 # TODO: inbounds and size checks
 
@@ -116,7 +117,7 @@ function espirit_eigen(transformed_kernels::AbstractArray{<: Number, N}, num_λ:
 	# Iterate spatial positions
 	which_eigenvecs = channels-num_λ+1:channels
 	Gs = [Matrix{ComplexF64}(undef, channels, channels) for _ = 1:Threads.nthreads()]
-	Threads.@threads for X in CartesianIndices(spatial_shape)
+	Threads.@threads :static for X in CartesianIndices(spatial_shape)
 		G = Gs[Threads.threadid()]
 		g = @view transformed_kernels[:, :, X]
 		G .= g * g'
@@ -514,6 +515,7 @@ function direct_normalise_sensitivities!(
 end
 
 """
+	McKenzie2002
 	1) Apply window to calibration in kspace (remove Gibbs ringing)
 	2) Inverse Fourier transform
 	3) Divide by root sum of squares

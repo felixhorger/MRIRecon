@@ -12,6 +12,8 @@ end
 """
 	sensitivities[spatial dimensions..., channels]
 	not side effect free
+	TODO: what if sensitivities are real but the data type of the operator is complex? T restricts this
+	Tiny use case is simulations with real coil profiles
 """
 function plan_sensitivities(
 	sensitivities::AbstractArray{T, N},

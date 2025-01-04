@@ -1,5 +1,5 @@
 # Uecker2019 ENLIVE
-# Uecker2017 ESPIRIT+Virtual Conjugate Coils
+# Uecker2016 ESPIRIT+Virtual Conjugate Coils
 # Iyer2020 Sure based parameter estimation for ESPIRIT
 # Ilicak2020 Automated parameter selection for accelerated MRI ...
 # TODO: outsource this?
@@ -490,7 +490,8 @@ function direct_normalise_sensitivities!(
 	sensitivities::AbstractArray{<: Number, N},
 	rsos::AbstractArray{<: Real, M},
 	cut::Real,
-	tol::Real
+	tol::Real;
+	λ::Real=1e-8
 ) where {N, M}
 	@assert M == N-1 # Channels are not in rsos or outshape
 	@assert 0 ≤ cut ≤ 1
@@ -502,8 +503,8 @@ function direct_normalise_sensitivities!(
 	tol *= maxi
 	inv_tol = 1 / tol
 	for x in CartesianIndices(rsos)
-		normalisation = rsos[x]
-		attenuation = smooth_step((normalisation - cut + tol) * inv_tol)
+		normalisation = λ + rsos[x]
+		attenuation = 1 #smooth_step((normalisation - cut + tol) * inv_tol)
 		if normalisation == 0
 			factor = 0.0
 		else

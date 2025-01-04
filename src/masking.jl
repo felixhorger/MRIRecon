@@ -1,4 +1,4 @@
-# TODO: rename sampling?
+# TODO: rename sampling!
 
 """
 	dense sampling mask
@@ -111,6 +111,26 @@ function split_sampling(split_indices_spatially::AbstractArray{<: AbstractVector
 	end
 	return split_indices
 end
+function split_sampling(
+	split_indices_spatially::AbstractArray{<: AbstractVector{<: Integer}, N},
+	guide_sampling::AbstractVector{<: CartesianIndex{N}},
+	num_dynamic::Integer
+) where N
+	split_indices = [Vector{CartesianIndex{N}}(undef, 0) for _ = 1:num_dynamic]
+	for I in guide_sampling
+		while length(split_indices_spatially[I]) > 0
+			t = pop!(split_indices_spatially[I])
+			push!(split_indices[t], I)
+		end
+	end
+	for I in CartesianIndices(split_indices_spatially)
+		while length(split_indices_spatially[I]) > 0
+			t = pop!(split_indices_spatially[I])
+			push!(split_indices[t], I)
+		end
+	end
+	return split_indices
+end
 
 """
 """
@@ -206,6 +226,8 @@ end
 	
 	indices outside shape are ignored!
 	shape = (readout, phase encode ..., channels, num_dynamic)
+	TODO: need to change to pre and post, i.e. don't call readout and num_channels.
+	However, still need to differentiate between the "static" dims readout and channels and dynamics
 """
 function plan_masking!(
 	indices::AbstractVector{<: CartesianIndex{N}},
@@ -231,6 +253,87 @@ function plan_masking!(
 
 	return U
 end
+
+function plan_masking( # bang is missing here
+	indices::AbstractVector{<: CartesianIndex{N}},
+	shape::NTuple{M, Integer};
+	dtype::Type=ComplexF64 # Needed for type stability
+) where {N, M}
+	@assert N == M - 3 "indices must include only phase encoding, shape = (readout, phase encode..., channels, dynamic)"
+	# Readout, channels, dynamic
+
+	# Get unsampled indices
+	indices_to_mask = unsampled_indices(indices, shape[2:N+1], shape[M])
+
+	# Construct linear operator
+	U = HermitianOperator{dtype}(
+		prod(shape),
+		(y, x) -> begin
+			@assert length(y) == 0
+			x_in_shape = reshape(x, shape)
+			apply_sparse_mask!(x_in_shape, indices_to_mask)
+			x
+		end
+	)
+
+	return U
+end
+
+function masking_size(indices::AbstractVector{<: CartesianIndex{N}}, shape::NTuple{M, Integer}) where {N, M}
+	shape_out = (shape[1], length(indices), shape[M-1], shape[M])
+	return shape_out
+end
+
+function plan_masking(
+	indices::AbstractVector{<: CartesianIndex{N}},
+	shape::NTuple{M, Integer},
+	dummy; # remove after bang is added to above function, can't be bothered to change in all scripts, sorry
+	dtype::Type{T}=ComplexF64, # Needed for type stability
+	Ux::AbstractVector{<: T}=Vector{dtype}(undef, 0),
+	UHy::AbstractVector{<: T}=Vector{dtype}(undef, 0) # TODO: in general with these operators, it's not nice that the size has to be determined twice, once when generating the vector to provide here, and once again inside the function
+) where {N, M, T <: Number}
+	@assert N == M - 3 "indices must include only phase encoding, shape = (readout, phase encode..., channels, dynamic)"
+	# Readout, channels, dynamic
+
+	shape_out = masking_size(indices, shape)
+	num_in = prod(shape)
+	num_out = prod(shape_out)
+
+	Ux = check_allocate(Ux, num_out)
+	UHy = check_allocate(UHy, num_in)
+
+	# Construct linear operator
+	U = LinearOperator{dtype}(
+		(num_out, num_in),
+		(y, x) -> begin
+			x_in_shape = reshape(x, shape)
+			y_in_shape = reshape(y, shape_out)
+			for t = 1:shape[M], c = 1:shape[M-1]
+				for (i, I) in enumerate(indices)
+					@views y_in_shape[:, i, c, t] .= x_in_shape[:, I, c, t]
+				end
+			end
+			y
+		end;
+		adj = (x, y) -> begin
+			x .= 0 # This is a bit crap. Best would be to have a Bool array indicating whether to copy a value or set to zero.
+			x_in_shape = reshape(x, shape)
+			y_in_shape = reshape(y, shape_out)
+			for t = 1:shape[M], c = 1:shape[M-1]
+				for (i, I) in enumerate(indices)
+					@views x_in_shape[:, I, c, t] .= y_in_shape[:, i, c, t]
+				end
+			end
+			x
+		end,
+		out=Ux,
+		out_adj_inv=UHy
+	)
+
+	return U
+end
+
+
 
 function plan_regular_undersampling!(
 	shape::NTuple{D, Integer},
@@ -394,6 +497,7 @@ function average_duplicates!(a::AbstractArray{<: Number, 3}, indices::AbstractVe
 		j = mod1(i, num_dynamic)
 		indices_of_dynamic = split_indices[j]
 		k = searchsortedfirst(indices_of_dynamic, index)
+		k > length(indices_of_dynamic) && continue
 		other_index = indices_of_dynamic[k]
 		if other_index == index
 			i_before = split_indices_a[j][k]

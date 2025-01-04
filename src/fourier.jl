@@ -9,7 +9,7 @@
 	However, F' F = I, so why bother?
 """
 function plan_fourier_transform(
-	y::AbstractArray{<: T, N}, # TODO: make this argument analogous to the other operators
+	y::AbstractArray{<: T, N}, # TODO: make this argument analogous to the other operators, but then also need to change in UnitaryOperator which only has "out"
 	dims::Union{Integer, NTuple{M, Integer} where M, AbstractVector{<: Integer}};
 	kwargs...
 ) where {T <: Complex, N}
@@ -91,12 +91,13 @@ function plan_fourier_transform(
 	dtype::Type{T}=ComplexF64,
 	Fx::AbstractVector{<: T}=empty(Vector{dtype}),
 	FHy::AbstractVector{<: T}=empty(Vector{dtype}),
-	eps::Real=1e-12,
+	eps::Real=1e-8,
 	upsampling=2,
 	nthreads::Integer=Threads.nthreads(),
 	kwargs...
 ) where {D, T <: Complex}
 
+	@assert D-1 == size(k, 1)
 	@assert size(k, 1) ∈ (1, 2, 3)
 	num_frequencies = size(k, 2)
 	num_out, num_in = fourier_transform_size(num_frequencies, shape)
@@ -338,7 +339,7 @@ function plan_toeplitz(
 	weights::AbstractVector{<: Number};
 	dtype::Type{T}=ComplexF64,
 	padded::AbstractArray{<: T, 3}=empty(Array{T, 3}),
-	eps::Real=1e-12,
+	eps::Real=1e-8,
 	upsampling::Integer=2,
 	finufft_kwargs::Dict=Dict(),
 	fftw_flags=FFTW.MEASURE,
@@ -366,7 +367,7 @@ function plan_toeplitz!(
 	shape::NTuple{3, Integer}; # (spatial 1, spatial 2, other)
 	dtype::Type{T}=ComplexF64,
 	padded::AbstractArray{<: T, 3}=empty(Array{T, 3}),
-	eps::Real=1e-12,
+	eps::Real=1e-8,
 	upsampling::Integer=2,
 	finufft_kwargs::Dict=Dict(),
 	fftw_flags=FFTW.MEASURE,
